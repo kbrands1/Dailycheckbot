@@ -1,0 +1,32 @@
+{
+  "timeZone": "America/Chicago",
+  "exceptionLogging": "STACKDRIVER",
+  "runtimeVersion": "V8",
+  "dependencies": {
+    "enabledAdvancedServices": [
+      {
+        "userSymbol": "BigQuery",
+        "version": "v2",
+        "serviceId": "bigquery"
+      }
+    ]
+  },
+  "oauthScopes": [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+    "https://www.googleapis.com/auth/script.external_request",
+    "https://www.googleapis.com/auth/bigquery",
+    "https://www.googleapis.com/auth/chat.messages.create",
+    "https://www.googleapis.com/auth/chat.spaces.readonly"
+  ],
+  "addOns": {
+    "chat": {},
+    "common": {
+      "name": "Check-in Bot",
+      "logoUrl": "https://www.gstatic.com/images/branding/product/2x/chat_2020q4_48dp.png",
+      "layoutProperties": {
+        "primaryColor": "#2772ed"
+      }
+    }
+  }
+}
