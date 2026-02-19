@@ -264,7 +264,8 @@ function loadClickUpConfigTab(ss) {
       auto_update: true,
       add_comments: true,
       show_weekly_monday: true,
-      overdue_warning: true
+      overdue_warning: true,
+      use_clickup_time_estimates: false
     };
   }
 

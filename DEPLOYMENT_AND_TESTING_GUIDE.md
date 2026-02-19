@@ -66,7 +66,9 @@ Create a Google Sheet with these tabs (exact tab names matter):
 | `default_end` | 17:00 |
 | `friday_start` | 07:00 |
 | `friday_end` | 11:30 |
-| `hours_per_day` | 8 |
+| `default_hours_per_day` | 8 |
+| `friday_hours_per_day` | 4 |
+| `timezone` | 'America/Chicago' |
 
 #### Tab: `holidays`
 | date | name | type |
@@ -80,6 +82,10 @@ Create a Google Sheet with these tabs (exact tab names matter):
 | `enabled` | true |
 | `include_in_morning` | true |
 | `include_in_eod` | true |
+| `auto_update` | true |
+| `add_comments` | true |
+| `show_weekly_monday` | true |
+| `overdue_warning` | true |
 | `use_clickup_time_estimates` | false |
 
 #### Tab: `clickup_user_map`

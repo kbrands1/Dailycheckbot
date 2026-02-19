@@ -8,41 +8,6 @@
 
 Create a Google Sheet with these tabs (exact tab names matter):
 
-#### Tab: `team_members`
-| email | name | department | manager_email | active | custom_start_time | custom_end_time | timezone | task_source | tracking_mode | custom_block2_start | custom_block2_end |
-|-------|------|------------|---------------|--------|-------------------|-----------------|----------|-------------|---------------|---------------------|-------------------|
-| john@co.com | John Smith | Engineering | manager@co.com | TRUE | 08:00 | 17:00 | America/Chicago | clickup | tracked | | |
-| sara@co.com | Sara Jones | Design | manager@co.com | TRUE | 09:00 | 13:00 | America/Chicago | clickup | tracked | 20:00 | 23:00 |
-| ceo@co.com | CEO | Executive | | TRUE | | | America/Chicago | | not_tracked | | |
-
-**Column notes:**
-- `tracking_mode`: `tracked` (default) = receives prompts and is tracked. `not_tracked` = no prompts, but still appears in reports as "not tracked". Can still DM the bot voluntarily.
-- `custom_start_time` / `custom_end_time`: Block 1 work hours. Leave blank to use global defaults.
-- `custom_block2_start` / `custom_block2_end`: Optional Block 2 for split-shift employees (e.g. Ramadan evening block). Leave blank for single-block schedules.
-
-#### Tab: `work_hours`
-| key | value |
-|-----|-------|
-| `default_start` | 08:00 |
-| `default_end` | 17:00 |
-| `friday_start` | 07:00 |
-| `friday_end` | 11:30 |
-| `hours_per_day` | 8 |
-
-#### Tab: `holidays`
-| date | name | type |
-|------|------|------|
-| 2025-12-25 | Christmas | full |
-| 2025-12-31 | NYE | half_am |
-
-#### Tab: `clickup_config`
-| key | value |
-|-----|-------|
-| `enabled` | true |
-| `include_in_morning` | true |
-| `include_in_eod` | true |
-| `use_clickup_time_estimates` | false |
-
 #### Tab: `clickup_user_map`
 | email | clickup_user_id | clickup_username |
 |-------|-----------------|------------------|
