@@ -2,14 +2,6 @@
 
 ### 3.2 Message Flow Tests (DM the Bot in Google Chat)
 
-**Test B: Check-in Flow**
-| # | Step | Expected Behavior |
-|---|------|-------------------|
-| 1 | Wait for morning check-in prompt (or run `testSendCheckIn()`) | Bot DMs you asking to check in |
-| 2 | Reply `here` | Bot confirms check-in, marks late/on-time |
-| 3 | Check BigQuery `check_ins` table | New row with your email, date, is_late flag |
-| 4 | Check BigQuery `prompt_log` table | Row with prompt_type=CHECKIN, response_received=true, latency calculated |
-
 **Test C: EOD Flow**
 | # | Step | Expected Behavior |
 |---|------|-------------------|

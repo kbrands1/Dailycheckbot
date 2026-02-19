@@ -225,6 +225,8 @@ function testSendEodRequest() {
   const tasks = getTasksForUser(email, 'today');
   const eod = getEodRequestMessage({ email }, tasks);
   const result = sendDirectMessage(email, eod.text, eod.cardsV2);
+  logPromptSent(email, 'EOD');
+  setUserState(email, 'AWAITING_EOD');
   console.log(`EOD sent to ${email}`, result);
 }
 
