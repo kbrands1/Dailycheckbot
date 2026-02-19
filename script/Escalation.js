@@ -98,10 +98,17 @@ function escalateOverdueTask(taskId, taskName, assigneeEmail, daysOverdue) {
  */
 function checkMorningEscalations() {
   const teamMembers = getCachedWorkingEmployees();
+  const config = getConfig();
   const todayCheckIns = getTodayCheckIns();
   const checkedInEmails = new Set(todayCheckIns.map(c => c.user_email));
-  
-  const missing = teamMembers.filter(m => !checkedInEmails.has(m.email));
+
+  // Skip not-tracked users from escalation
+  const missing = teamMembers.filter(function(m) {
+    if (checkedInEmails.has(m.email)) return false;
+    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+    if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
+    return true;
+  });
   
   for (const member of missing) {
     // Log missed check-in
@@ -113,10 +120,13 @@ function checkMorningEscalations() {
   
   // Also check for chronic overdue
   checkChronicOverdueAlerts();
-  
+
   // Check team threshold
   checkTeamOverdueThreshold();
-  
+
+  // Check for persistent blockers
+  checkPersistentBlockers();
+
   return {
     escalated: missing.length,
     members: missing.map(m => m.email)
@@ -128,10 +138,17 @@ function checkMorningEscalations() {
  */
 function checkEodEscalations() {
   const teamMembers = getCachedWorkingEmployees();
+  const config = getConfig();
   const todayEods = getTodayEodReports();
   const submittedEmails = new Set(todayEods.map(e => e.user_email));
-  
-  const missing = teamMembers.filter(m => !submittedEmails.has(m.email));
+
+  // Skip not-tracked users from escalation
+  const missing = teamMembers.filter(function(m) {
+    if (submittedEmails.has(m.email)) return false;
+    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+    if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
+    return true;
+  });
   
   for (const member of missing) {
     // Log missed EOD
@@ -182,8 +199,64 @@ function checkCapacityWarnings() {
       });
     });
     
-    logSystemEvent('CAPACITY_WARNING', 'SENT', { 
-      peopleWarned: results.length 
+    logSystemEvent('CAPACITY_WARNING', 'SENT', {
+      peopleWarned: results.length
     });
   }
+}
+
+/**
+ * Check for persistent blockers (same blocker 2+ consecutive days)
+ * Called as part of morning escalations
+ */
+function checkPersistentBlockers() {
+  var projectId = getProjectId();
+  var today = new Date();
+  var config = getConfig();
+  var blockerDays = parseInt(config.settings.blocker_escalation_days) || 2;
+  var lookback = new Date(today);
+  lookback.setDate(today.getDate() - (blockerDays + 1));
+  var startStr = Utilities.formatDate(lookback, 'America/Chicago', 'yyyy-MM-dd');
+
+  var query = 'SELECT user_email, blockers, eod_date ' +
+    'FROM `' + projectId + '.' + DATASET_ID + '.eod_reports` ' +
+    'WHERE eod_date >= "' + startStr + '" AND blockers IS NOT NULL AND blockers != "" ' +
+    'ORDER BY user_email, eod_date';
+
+  var results = runBigQueryQuery(query);
+
+  // Group by user
+  var userBlockers = {};
+  results.forEach(function(r) {
+    if (!userBlockers[r.user_email]) userBlockers[r.user_email] = [];
+    userBlockers[r.user_email].push({ date: r.eod_date, blocker: r.blockers });
+  });
+
+  var teamMembers = getCachedWorkingEmployees();
+  var nameMap = {};
+  teamMembers.forEach(function(m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
+
+  // Check for consecutive days with blockers
+  Object.keys(userBlockers).forEach(function(email) {
+    var entries = userBlockers[email];
+    if (entries.length >= blockerDays) {
+      var name = nameMap[email] || email;
+      var blockerTexts = entries.map(function(e) { return e.date + ': ' + e.blocker; }).join('\n');
+
+      var message = '🔴 *Persistent Blocker Alert*\n\n' +
+        name + ' has reported blockers for ' + entries.length + ' consecutive days:\n\n' +
+        blockerTexts + '\n\n' +
+        'This may need manager intervention.';
+
+      sendDirectMessage(config.settings.manager_email, message);
+
+      insertIntoBigQuery('escalations', [{
+        escalation_id: Utilities.getUuid(),
+        escalation_type: 'PERSISTENT_BLOCKER',
+        user_email: email,
+        recipients: JSON.stringify([config.settings.manager_email]),
+        created_at: new Date().toISOString()
+      }]);
+    }
+  });
 }

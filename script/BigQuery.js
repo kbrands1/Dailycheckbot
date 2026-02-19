@@ -65,11 +65,25 @@ function runBigQueryQuery(query) {
   if (!token) {
     console.error('SA token missing for query, falling back to built-in service');
     try {
+      var alertConfig = getConfig();
+      sendDirectMessage(alertConfig.settings.manager_email,
+        '⚠️ BigQuery service account token failed. Using built-in fallback. Check SA key expiry.');
+    } catch (alertErr) { /* don't let alert failure break the query */ }
+    try {
       const request = { query: query, useLegacySql: false };
       let queryResults = BigQuery.Jobs.query(request, projectId);
-      // ... minimal parsing or just returning empty since this is a fallback
+      if (!queryResults.rows) return [];
+      return queryResults.rows.map(row => {
+        const obj = {};
+        row.f.forEach((cell, i) => {
+          obj[queryResults.schema.fields[i].name] = cell.v;
+        });
+        return obj;
+      });
+    } catch (e) {
+      console.error('Built-in BigQuery fallback failed:', e.message);
       return [];
-    } catch (e) { return []; }
+    }
   }
 
   try {
@@ -125,9 +139,28 @@ function runBigQueryQuery(query) {
 }
 
 /**
- * Log a check-in
+ * Check if a record already exists for a user on a given date
+ * Used for deduplication of check-ins and EODs
+ */
+function hasExistingRecord(tableName, emailField, dateField, email, date) {
+  var safeEmail = sanitizeForBQ(email);
+  var dateStr = Utilities.formatDate(date, 'America/Chicago', 'yyyy-MM-dd');
+  var query = 'SELECT COUNT(*) as cnt FROM `' + getProjectId() + '.' + DATASET_ID + '.' + tableName +
+    '` WHERE ' + emailField + ' = "' + safeEmail + '" AND ' + dateField + ' = "' + dateStr + '"';
+  var results = runBigQueryQuery(query);
+  return results.length > 0 && parseInt(results[0].cnt) > 0;
+}
+
+/**
+ * Log a check-in (with deduplication)
  */
 function logCheckIn(email, timestamp, response, isLate) {
+  // Deduplication: skip if already checked in today
+  if (hasExistingRecord('check_ins', 'user_email', 'checkin_date', email, timestamp)) {
+    console.log('Duplicate check-in skipped for ' + email);
+    return null;
+  }
+
   const row = {
     checkin_id: Utilities.getUuid(),
     user_email: email,
@@ -143,9 +176,15 @@ function logCheckIn(email, timestamp, response, isLate) {
 }
 
 /**
- * Log an EOD report
+ * Log an EOD report (with deduplication)
  */
 function logEodReport(email, timestamp, tasksCompleted, blockers, tomorrowPriority, rawResponse, hoursWorked) {
+  // Deduplication: skip if already submitted EOD today
+  if (hasExistingRecord('eod_reports', 'user_email', 'eod_date', email, timestamp)) {
+    console.log('Duplicate EOD report skipped for ' + email);
+    return null;
+  }
+
   const row = {
     eod_id: Utilities.getUuid(),
     user_email: email,
@@ -938,4 +977,190 @@ function getHoursTrends() {
     + ' GROUP BY user_email, week_num'
     + ' ORDER BY user_email, week_num';
   return runBigQueryQuery(query);
+}
+
+// ============================================
+// PROMPT LOGGING (V2)
+// ============================================
+
+/**
+ * Log a prompt sent to a user
+ * Returns the prompt_id for tracking
+ */
+function logPromptSent(email, promptType) {
+  var promptId = Utilities.getUuid();
+  var now = new Date();
+  var row = {
+    prompt_id: promptId,
+    user_email: email,
+    prompt_type: promptType,
+    sent_at: now.toISOString(),
+    response_received: false,
+    response_at: null,
+    response_latency_minutes: null,
+    created_at: now.toISOString()
+  };
+  insertIntoBigQuery('prompt_log', [row]);
+
+  // Cache the prompt_id for this user+type so we can match the response
+  // Using prompt type in key prevents collisions when multiple prompts sent before response
+  var cache = CacheService.getScriptCache();
+  cache.put('LAST_PROMPT_' + promptType + '_' + email, JSON.stringify({
+    prompt_id: promptId,
+    prompt_type: promptType,
+    sent_at: now.toISOString()
+  }), 14400); // 4 hour TTL
+  return promptId;
+}
+
+/**
+ * Log a prompt response from a user
+ * Matches to the last sent prompt of given type and calculates latency
+ * @param {string} email User email
+ * @param {string} promptType The prompt type to match (e.g. 'CHECKIN', 'EOD')
+ */
+function logPromptResponse(email, promptType) {
+  var cache = CacheService.getScriptCache();
+  var raw = cache.get('LAST_PROMPT_' + promptType + '_' + email);
+  if (!raw) return null;
+
+  var promptData = JSON.parse(raw);
+  var now = new Date();
+  var sentAt = new Date(promptData.sent_at);
+  var latencyMinutes = Math.round((now - sentAt) / 60000 * 10) / 10;
+
+  // Update the prompt_log record in BigQuery (safe: prompt_id is UUID we generated)
+  try {
+    var query = 'UPDATE `' + getProjectId() + '.' + DATASET_ID + '.prompt_log` ' +
+      'SET response_received = true, response_at = "' + now.toISOString() +
+      '", response_latency_minutes = ' + latencyMinutes +
+      ' WHERE prompt_id = "' + promptData.prompt_id + '"';
+    runBigQueryQuery(query);
+  } catch (e) {
+    // If prompt_log table doesn't exist yet, log and continue gracefully
+    console.warn('prompt_log UPDATE failed (table may not exist yet):', e.message);
+  }
+
+  cache.remove('LAST_PROMPT_' + promptType + '_' + email);
+  return { prompt_id: promptData.prompt_id, latency_minutes: latencyMinutes, prompt_type: promptData.prompt_type };
+}
+
+// ============================================
+// TASK PUSH COUNT TRACKING (V2)
+// ============================================
+
+/**
+ * Get push count for a task (how many times it was moved to "Tomorrow")
+ */
+function getTaskPushCount(taskId) {
+  var projectId = getProjectId();
+  var query = 'SELECT COUNT(*) as push_count FROM `' + projectId + '.' + DATASET_ID + '.clickup_task_actions` ' +
+    'WHERE task_id = "' + taskId + '" AND action_type = "TOMORROW"';
+  var results = runBigQueryQuery(query);
+  return results.length > 0 ? parseInt(results[0].push_count) : 0;
+}
+
+/**
+ * Get all tasks pushed 3+ times (chronic delays)
+ */
+function getChronicallyDelayedTasks() {
+  var projectId = getProjectId();
+  var query = 'SELECT task_id, task_name, user_email, COUNT(*) as push_count, ' +
+    'MAX(timestamp) as last_pushed ' +
+    'FROM `' + projectId + '.' + DATASET_ID + '.clickup_task_actions` ' +
+    'WHERE action_type = "TOMORROW" ' +
+    'GROUP BY task_id, task_name, user_email ' +
+    'HAVING push_count >= 3 ' +
+    'ORDER BY push_count DESC';
+  return runBigQueryQuery(query);
+}
+
+// ============================================
+// V2 TABLE CREATION
+// ============================================
+
+/**
+ * Create all new BigQuery tables for V2 features
+ * Run this once during setup
+ */
+function createV2Tables() {
+  var projectId = getProjectId();
+
+  var tables = [
+    {
+      name: 'prompt_log',
+      schema: [
+        { name: 'prompt_id', type: 'STRING', mode: 'REQUIRED' },
+        { name: 'user_email', type: 'STRING', mode: 'REQUIRED' },
+        { name: 'prompt_type', type: 'STRING', mode: 'REQUIRED' },
+        { name: 'sent_at', type: 'TIMESTAMP', mode: 'REQUIRED' },
+        { name: 'response_received', type: 'BOOLEAN' },
+        { name: 'response_at', type: 'TIMESTAMP' },
+        { name: 'response_latency_minutes', type: 'FLOAT' },
+        { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+      ]
+    },
+    {
+      name: 'daily_adoption_metrics',
+      schema: [
+        { name: 'metric_id', type: 'STRING', mode: 'REQUIRED' },
+        { name: 'metric_date', type: 'DATE', mode: 'REQUIRED' },
+        { name: 'user_email', type: 'STRING', mode: 'REQUIRED' },
+        { name: 'checkin_prompted', type: 'BOOLEAN' },
+        { name: 'checkin_responded', type: 'BOOLEAN' },
+        { name: 'checkin_latency_minutes', type: 'FLOAT' },
+        { name: 'checkin_is_late', type: 'BOOLEAN' },
+        { name: 'eod_prompted', type: 'BOOLEAN' },
+        { name: 'eod_responded', type: 'BOOLEAN' },
+        { name: 'eod_latency_minutes', type: 'FLOAT' },
+        { name: 'eod_word_count', type: 'INTEGER' },
+        { name: 'eod_hours_included', type: 'BOOLEAN' },
+        { name: 'eod_blockers_included', type: 'BOOLEAN' },
+        { name: 'eod_tomorrow_included', type: 'BOOLEAN' },
+        { name: 'used_task_buttons', type: 'BOOLEAN' },
+        { name: 'button_actions_count', type: 'INTEGER' },
+        { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+      ]
+    },
+    {
+      name: 'weekly_adoption_scores',
+      schema: [
+        { name: 'score_id', type: 'STRING', mode: 'REQUIRED' },
+        { name: 'week_start', type: 'DATE', mode: 'REQUIRED' },
+        { name: 'week_end', type: 'DATE', mode: 'REQUIRED' },
+        { name: 'user_email', type: 'STRING', mode: 'REQUIRED' },
+        { name: 'checkin_response_rate', type: 'INTEGER' },
+        { name: 'eod_response_rate', type: 'INTEGER' },
+        { name: 'avg_checkin_latency_minutes', type: 'FLOAT' },
+        { name: 'avg_eod_latency_minutes', type: 'FLOAT' },
+        { name: 'avg_eod_word_count', type: 'INTEGER' },
+        { name: 'hours_inclusion_rate', type: 'INTEGER' },
+        { name: 'tomorrow_inclusion_rate', type: 'INTEGER' },
+        { name: 'button_adoption_rate', type: 'INTEGER' },
+        { name: 'adoption_score', type: 'INTEGER' },
+        { name: 'created_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+      ]
+    }
+  ];
+
+  tables.forEach(function(table) {
+    try {
+      var resource = {
+        tableReference: {
+          projectId: projectId,
+          datasetId: DATASET_ID,
+          tableId: table.name
+        },
+        schema: { fields: table.schema }
+      };
+      BigQuery.Tables.insert(resource, projectId, DATASET_ID);
+      console.log('Created table: ' + table.name);
+    } catch (e) {
+      if (e.message.includes('Already Exists')) {
+        console.log('Table already exists: ' + table.name);
+      } else {
+        console.error('Error creating table ' + table.name + ':', e.message);
+      }
+    }
+  });
 }

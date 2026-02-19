@@ -27,14 +27,15 @@ function getDMSpace(userEmail) {
     return DM_SPACE_CACHE[userEmail];
   }
 
-  // Check persistent storage
+  // Check persistent storage (individual property per user)
   try {
     const props = PropertiesService.getScriptProperties();
-    const dmSpaces = JSON.parse(props.getProperty('DM_SPACES') || '{}');
+    var key = 'DM_SPACE_' + userEmail.replace(/[^a-zA-Z0-9]/g, '_');
+    var spaceName = props.getProperty(key);
 
-    if (dmSpaces[userEmail]) {
-      DM_SPACE_CACHE[userEmail] = dmSpaces[userEmail];
-      return dmSpaces[userEmail];
+    if (spaceName) {
+      DM_SPACE_CACHE[userEmail] = spaceName;
+      return spaceName;
     }
   } catch (error) {
     console.error(`Error getting DM space for ${userEmail}:`, error);
@@ -47,22 +48,50 @@ function getDMSpace(userEmail) {
 
 /**
  * Store DM space when user first interacts with bot
- * Called from onMessage event handler
+ * Stores as individual property: DM_SPACE_{email}
  */
 function storeDMSpace(userEmail, spaceName) {
   try {
     // Update in-memory cache
     DM_SPACE_CACHE[userEmail] = spaceName;
 
-    // Persist to Script Properties
+    // Persist to Script Properties (individual property per user)
     const props = PropertiesService.getScriptProperties();
-    const dmSpaces = JSON.parse(props.getProperty('DM_SPACES') || '{}');
-    dmSpaces[userEmail] = spaceName;
-    props.setProperty('DM_SPACES', JSON.stringify(dmSpaces));
+    var key = 'DM_SPACE_' + userEmail.replace(/[^a-zA-Z0-9]/g, '_');
+    props.setProperty(key, spaceName);
 
     console.log(`Stored DM space for ${userEmail}: ${spaceName}`);
   } catch (error) {
     console.error(`Error storing DM space for ${userEmail}:`, error);
+  }
+}
+
+/**
+ * One-time migration: move DM spaces from JSON blob to individual properties
+ * Run once after deploying V2
+ */
+function migrateDMSpaces() {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var blobJson = props.getProperty('DM_SPACES');
+    if (!blobJson) {
+      console.log('No DM_SPACES blob to migrate');
+      return;
+    }
+
+    var dmSpaces = JSON.parse(blobJson);
+    var count = 0;
+    for (var email in dmSpaces) {
+      var key = 'DM_SPACE_' + email.replace(/[^a-zA-Z0-9]/g, '_');
+      props.setProperty(key, dmSpaces[email]);
+      count++;
+    }
+
+    // Delete the old blob
+    props.deleteProperty('DM_SPACES');
+    console.log('Migrated ' + count + ' DM spaces to individual properties');
+  } catch (error) {
+    console.error('Error migrating DM spaces:', error);
   }
 }
 
@@ -260,7 +289,7 @@ function getTeamUpdatesChannel() {
 /**
  * Post morning summary to team channel
  */
-function postMorningSummary(checkedIn, late, missing, overdueStats, onLeaveToday, todayBirthdays) {
+function postMorningSummary(checkedIn, late, missing, overdueStats, onLeaveToday, todayBirthdays, notTracked) {
   const spaceId = getTeamUpdatesChannel();
   if (!spaceId) {
     console.error('Team updates channel not configured');
@@ -317,13 +346,18 @@ function postMorningSummary(checkedIn, late, missing, overdueStats, onLeaveToday
     }
   }
 
+  // Not tracked section
+  if (notTracked && notTracked.length > 0) {
+    message += `\n📌 Not tracked: ${notTracked.map(function(m) { return m.name || m.email.split('@')[0]; }).join(', ')}\n`;
+  }
+
   sendChannelMessage(spaceId, message);
 }
 
 /**
  * Post EOD summary to team channel
  */
-function postEodSummary(submitted, missing, taskStats, perPersonCompletions, todayBlockers) {
+function postEodSummary(submitted, missing, taskStats, perPersonCompletions, todayBlockers, notTracked) {
   const spaceId = getTeamUpdatesChannel();
   if (!spaceId) return;
 
@@ -376,6 +410,11 @@ function postEodSummary(submitted, missing, taskStats, perPersonCompletions, tod
     todayBlockers.forEach(function (b) {
       message += `• **${b.name}**: ${b.blocker}\n`;
     });
+  }
+
+  // Not tracked section
+  if (notTracked && notTracked.length > 0) {
+    message += `\n📌 Not tracked: ${notTracked.map(function(m) { return m.name || m.email.split('@')[0]; }).join(', ')}\n`;
   }
 
   sendChannelMessage(spaceId, message);

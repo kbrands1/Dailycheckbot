@@ -289,7 +289,7 @@ function syncEmployeesToSheet() {
   }
 
   // Prepare header row
-  const headers = ['email', 'name', 'department', 'manager_email', 'active', 'custom_start', 'custom_end', 'timezone', 'task_source'];
+  const headers = ['email', 'name', 'department', 'manager_email', 'active', 'custom_start', 'custom_end', 'timezone', 'task_source', 'tracking_mode', 'custom_block2_start', 'custom_block2_end'];
 
   // Get existing data to preserve custom fields (custom_start, custom_end, timezone, task_source)
   const existingData = sheet.getDataRange().getValues();
@@ -303,7 +303,10 @@ function syncEmployeesToSheet() {
           custom_start: existingData[i][5] || '',
           custom_end: existingData[i][6] || '',
           timezone: existingData[i][7] || 'America/Chicago',
-          task_source: existingData[i][8] || 'clickup'
+          task_source: existingData[i][8] || 'clickup',
+          tracking_mode: existingData[i][9] || 'tracked',
+          custom_block2_start: existingData[i][10] || '',
+          custom_block2_end: existingData[i][11] || ''
         };
       }
     }
@@ -321,7 +324,10 @@ function syncEmployeesToSheet() {
       existing.custom_start || '',
       existing.custom_end || '',
       existing.timezone || 'America/Chicago',
-      existing.task_source || 'clickup'
+      existing.task_source || 'clickup',
+      existing.tracking_mode || 'tracked',
+      existing.custom_block2_start || '',
+      existing.custom_block2_end || ''
     ];
   });
 

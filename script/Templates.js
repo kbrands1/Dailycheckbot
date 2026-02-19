@@ -386,3 +386,73 @@ function buildAiEvaluationPrompt(teamData) {
 
   return prompt;
 }
+
+/**
+ * Build morning standup digest from check-in responses
+ * Posted to team channel for peer visibility
+ */
+function buildStandupDigest(checkIns, teamMembers) {
+  var today = Utilities.formatDate(new Date(), 'America/Chicago', 'EEEE, MMMM d');
+  var message = '📋 *Team Standup - ' + today + '*\n\n';
+
+  var nameMap = {};
+  teamMembers.forEach(function(m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
+
+  if (checkIns.length === 0) {
+    message += 'No check-ins received yet.';
+    return message;
+  }
+
+  checkIns.forEach(function(ci) {
+    var name = nameMap[ci.user_email] || ci.user_email;
+    var response = ci.response_text || 'here';
+    if (response.toLowerCase().trim() === 'here' || response.toLowerCase().trim() === 'present') {
+      message += '*' + name + ':* ✅ Online\n';
+    } else {
+      message += '*' + name + ':* ' + response + '\n';
+    }
+  });
+
+  var config = getConfig();
+  var checkedInEmails = {};
+  checkIns.forEach(function(c) { checkedInEmails[c.user_email] = true; });
+  // Exclude not-tracked users from "missing" list
+  var missing = teamMembers.filter(function(m) {
+    if (checkedInEmails[m.email]) return false;
+    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+    if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
+    return true;
+  });
+  if (missing.length > 0) {
+    message += '\n⏳ *Not yet checked in:* ' + missing.map(function(m) { return nameMap[m.email]; }).join(', ');
+  }
+
+  return message;
+}
+
+/**
+ * Build EOD digest for team channel
+ */
+function buildEodDigest(eods, teamMembers) {
+  var today = Utilities.formatDate(new Date(), 'America/Chicago', 'EEEE, MMMM d');
+  var message = '📝 *Team EOD Summary - ' + today + '*\n\n';
+
+  var nameMap = {};
+  teamMembers.forEach(function(m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
+
+  if (eods.length === 0) {
+    message += 'No EOD reports received yet.';
+    return message;
+  }
+
+  eods.forEach(function(eod) {
+    var name = nameMap[eod.user_email] || eod.user_email;
+    var summary = eod.tasks_completed || eod.raw_response || '(no details)';
+    if (summary.length > 200) summary = summary.substring(0, 197) + '...';
+    message += '*' + name + ':* ' + summary + '\n';
+    if (eod.blockers) message += '  ⚠️ Blocker: ' + eod.blockers + '\n';
+    message += '\n';
+  });
+
+  return message;
+}

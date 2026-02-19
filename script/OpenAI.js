@@ -55,16 +55,47 @@ function callOpenAI(prompt, maxTokens = 2000) {
 }
 
 /**
+ * Parse EOD response using OpenAI for structured extraction
+ * Returns { tasks_completed, blockers, tomorrow_priority, hours_worked }
+ */
+function parseEodWithAI(rawText) {
+  var prompt = 'Parse this end-of-day work report into structured JSON. Extract exactly these fields:\n' +
+    '- tasks_completed: string (what they accomplished today)\n' +
+    '- blockers: string or null (any blockers, issues, things they are waiting on)\n' +
+    '- tomorrow_priority: string or null (what they plan to do tomorrow/next)\n' +
+    '- hours_worked: number or null (hours worked today, if mentioned)\n\n' +
+    'Return ONLY valid JSON, no markdown, no explanation.\n\n' +
+    'EOD Report:\n' + rawText;
+
+  var result = callOpenAI(prompt, 500);
+  if (!result) return null;
+
+  try {
+    // Strip markdown code fences if present
+    var cleaned = result.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error('Failed to parse AI EOD response:', e.message, result);
+    return null;
+  }
+}
+
+/**
  * Generate daily AI evaluation
  */
 function generateDailyAiEvaluation() {
   console.log('Generating daily AI evaluation...');
   
-  const teamMembers = getCachedWorkingEmployees();
+  const allMembers = getCachedWorkingEmployees();
+  const config = getConfig();
+  // Filter to tracked users only for AI evaluation
+  const teamMembers = allMembers.filter(function(m) {
+    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+    return !fullMember || (fullMember.tracking_mode || 'tracked') === 'tracked';
+  });
   const todayCheckIns = getTodayCheckIns();
   const todayEods = getTodayEodReports();
-  const config = getConfig();
-  
+
   // Build team data for evaluation
   const teamData = teamMembers.map(member => {
     const checkIn = todayCheckIns.find(c => c.user_email === member.email);

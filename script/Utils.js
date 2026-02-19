@@ -64,6 +64,23 @@ function createScheduledTriggers() {
   // 10:15 AM - Weekly Gamification (Friday only, checked in function)
   ScriptApp.newTrigger('triggerWeeklyGamification').timeBased().atHour(10).nearMinute(15).everyDays(1).inTimezone('America/Chicago').create();
 
+  // V2 TRIGGERS
+
+  // 5:20 PM - Daily Adoption Metrics (Mon-Thu, checked in function)
+  ScriptApp.newTrigger('triggerDailyAdoptionMetrics').timeBased().atHour(17).nearMinute(20).everyDays(1).inTimezone('America/Chicago').create();
+
+  // 10:00 AM Wednesday - Midweek Compliance Check (checked in function)
+  ScriptApp.newTrigger('triggerMidweekCompliance').timeBased().atHour(10).nearMinute(0).everyDays(1).inTimezone('America/Chicago').create();
+
+  // 10:30 AM Friday - Weekly Adoption Report (checked in function)
+  ScriptApp.newTrigger('triggerWeeklyAdoptionReport').timeBased().atHour(10).nearMinute(30).everyDays(1).inTimezone('America/Chicago').create();
+
+  // 11:20 AM Friday - Daily Adoption Metrics for Friday (checked in function)
+  ScriptApp.newTrigger('triggerDailyAdoptionMetricsFriday').timeBased().atHour(11).nearMinute(20).everyDays(1).inTimezone('America/Chicago').create();
+
+  // Every 30 minutes - Schedule Dispatcher for custom/split-shift users
+  ScriptApp.newTrigger('triggerScheduleDispatcher').timeBased().everyMinutes(30).inTimezone('America/Chicago').create();
+
   const count = ScriptApp.getProjectTriggers().length;
   console.log(`All triggers created! Total: ${count}`);
 }

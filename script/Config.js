@@ -30,27 +30,29 @@
  * ============================================
  */
 
-// Cache for config to avoid repeated sheet reads
-let CONFIG_CACHE = null;
-let CONFIG_CACHE_TIME = null;
-const CONFIG_CACHE_DURATION = 300000; // 5 minutes
-
 /**
  * Get all configuration
+ * Uses CacheService for persistence across execution contexts
  */
 function getConfig() {
-  // Check cache
-  if (CONFIG_CACHE && CONFIG_CACHE_TIME && (Date.now() - CONFIG_CACHE_TIME < CONFIG_CACHE_DURATION)) {
-    return CONFIG_CACHE;
+  // Check CacheService first
+  var cache = CacheService.getScriptCache();
+  var cached = cache.get('CONFIG_JSON');
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (e) {
+      // corrupted cache, fall through to sheet read
+    }
   }
-  
+
   const props = PropertiesService.getScriptProperties();
   const sheetId = props.getProperty('CONFIG_SHEET_ID');
-  
+
   if (!sheetId) {
     throw new Error('CONFIG_SHEET_ID not set in Script Properties');
   }
-  
+
   const ss = SpreadsheetApp.openById(sheetId);
   const config = {
     // Script Properties (sensitive)
@@ -59,22 +61,22 @@ function getConfig() {
     clickup_api_token: props.getProperty('CLICKUP_API_TOKEN'),
     bigquery_project_id: props.getProperty('BIGQUERY_PROJECT_ID'),
     odoo_api_key: props.getProperty('ODOO_API_KEY'),
-    
+
     // From settings tab
     settings: loadSettingsTab(ss),
-    
+
     // From team_members tab
     team_members: loadTeamMembersTab(ss),
-    
+
     // From work_hours tab
     work_hours: loadWorkHoursTab(ss),
-    
+
     // From holidays tab
     holidays: loadHolidaysTab(ss),
-    
+
     // From clickup_config tab
     clickup_config: loadClickUpConfigTab(ss),
-    
+
     // From clickup_user_map tab
     clickup_user_map: loadClickUpUserMapTab(ss),
 
@@ -90,11 +92,14 @@ function getConfig() {
     // From email_mapping tab (Sage HR → Google email)
     email_mapping: loadEmailMappingTab(ss)
   };
-  
-  // Cache it
-  CONFIG_CACHE = config;
-  CONFIG_CACHE_TIME = Date.now();
-  
+
+  // Cache it (CacheService, not in-memory)
+  try {
+    cache.put('CONFIG_JSON', JSON.stringify(config), 300);
+  } catch (e) {
+    console.log('Config too large for cache, skipping');
+  }
+
   return config;
 }
 
@@ -102,8 +107,8 @@ function getConfig() {
  * Clear config cache (call after sheet updates)
  */
 function clearConfigCache() {
-  CONFIG_CACHE = null;
-  CONFIG_CACHE_TIME = null;
+  var cache = CacheService.getScriptCache();
+  cache.remove('CONFIG_JSON');
 }
 
 /**
@@ -112,15 +117,15 @@ function clearConfigCache() {
 function loadSettingsTab(ss) {
   const sheet = ss.getSheetByName('settings');
   if (!sheet) return {};
-  
+
   const data = sheet.getDataRange().getValues();
   const settings = {};
-  
+
   // Skip header row
   for (let i = 1; i < data.length; i++) {
     const key = data[i][0];
     let value = data[i][1];
-    
+
     if (key) {
       // Parse booleans
       if (value === 'TRUE' || value === true) value = true;
@@ -131,11 +136,11 @@ function loadSettingsTab(ss) {
       else if (typeof value === 'string' && value.includes(',') && value.includes('@')) {
         value = value.split(',').map(v => v.trim());
       }
-      
+
       settings[key] = value;
     }
   }
-  
+
   return settings;
 }
 
@@ -145,10 +150,10 @@ function loadSettingsTab(ss) {
 function loadTeamMembersTab(ss) {
   const sheet = ss.getSheetByName('team_members');
   if (!sheet) return [];
-  
+
   const data = sheet.getDataRange().getValues();
   const members = [];
-  
+
   // Skip header row
   for (let i = 1; i < data.length; i++) {
     if (data[i][0]) { // Has email
@@ -161,11 +166,14 @@ function loadTeamMembersTab(ss) {
         custom_start_time: data[i][5] || null,
         custom_end_time: data[i][6] || null,
         timezone: data[i][7] || 'America/Chicago',
-        task_source: data[i][8] || 'clickup'  // clickup, odoo, or both
+        task_source: data[i][8] || 'clickup',
+        tracking_mode: data[i][9] || 'tracked',
+        custom_block2_start: data[i][10] || null,
+        custom_block2_end: data[i][11] || null
       });
     }
   }
-  
+
   return members;
 }
 
@@ -207,7 +215,11 @@ function loadWorkHoursTab(ss) {
  * Get expected working hours for today
  * Returns 4 on Fridays, 8 on Mon-Thu (configurable via work_hours sheet)
  */
-function getTodayExpectedHours() {
+function getTodayExpectedHours(email) {
+  if (email) {
+    var schedule = getUserWorkSchedule(email);
+    return schedule.totalExpectedHours;
+  }
   var config = getConfig();
   var day = new Date().getDay();
   if (day === 5) {
@@ -222,10 +234,10 @@ function getTodayExpectedHours() {
 function loadHolidaysTab(ss) {
   const sheet = ss.getSheetByName('holidays');
   if (!sheet) return [];
-  
+
   const data = sheet.getDataRange().getValues();
   const holidays = [];
-  
+
   for (let i = 1; i < data.length; i++) {
     if (data[i][0]) {
       holidays.push({
@@ -235,7 +247,7 @@ function loadHolidaysTab(ss) {
       });
     }
   }
-  
+
   return holidays;
 }
 
@@ -255,19 +267,19 @@ function loadClickUpConfigTab(ss) {
       overdue_warning: true
     };
   }
-  
+
   const data = sheet.getDataRange().getValues();
   const config = {};
-  
+
   for (let i = 1; i < data.length; i++) {
     const key = data[i][0];
     let value = data[i][1];
-    
+
     if (key) {
       if (value === 'TRUE' || value === true) value = true;
       else if (value === 'FALSE' || value === false) value = false;
       else if (!isNaN(value) && value !== '') value = Number(value);
-      
+
       config[key] = value;
     }
   }
@@ -286,10 +298,10 @@ function loadClickUpConfigTab(ss) {
 function loadClickUpUserMapTab(ss) {
   const sheet = ss.getSheetByName('clickup_user_map');
   if (!sheet) return {};
-  
+
   const data = sheet.getDataRange().getValues();
   const map = {};
-  
+
   for (let i = 1; i < data.length; i++) {
     if (data[i][0] && data[i][1]) {
       map[data[i][0]] = {
@@ -298,7 +310,7 @@ function loadClickUpUserMapTab(ss) {
       };
     }
   }
-  
+
   return map;
 }
 
@@ -360,7 +372,7 @@ function loadOdooUserMapTab(ss) {
  */
 function getTasksForUser(email, period) {
   var config = getConfig();
-  var member = config.team_members.find(function(m) { return m.email === email; });
+  var member = config.team_members.find(function (m) { return m.email === email; });
   var taskSource = member ? member.task_source : 'clickup';
   var tasks = [];
 
@@ -368,7 +380,7 @@ function getTasksForUser(email, period) {
   if ((taskSource === 'clickup' || taskSource === 'both') && config.clickup_config.enabled) {
     try {
       var clickupTasks = getTasksDueForUser(email, period);
-      clickupTasks.forEach(function(t) { t.source = 'clickup'; });
+      clickupTasks.forEach(function (t) { t.source = 'clickup'; });
       tasks = tasks.concat(clickupTasks);
     } catch (err) {
       console.error('ClickUp task fetch error for ' + email + ':', err.message);
@@ -387,7 +399,7 @@ function getTasksForUser(email, period) {
   }
 
   // Re-sort merged list: overdue first, then by due date
-  tasks.sort(function(a, b) {
+  tasks.sort(function (a, b) {
     if (a.isOverdue && !b.isOverdue) return -1;
     if (!a.isOverdue && b.isOverdue) return 1;
     if (a.isOverdue && b.isOverdue) return b.daysOverdue - a.daysOverdue;
@@ -514,11 +526,31 @@ function getTodayWorkHours() {
 }
 
 /**
- * Get active team members
+ * Get active team members (all, including not-tracked)
  */
 function getActiveTeamMembers() {
   const config = getConfig();
   return config.team_members.filter(m => m.active);
+}
+
+/**
+ * Get active team members who should receive prompts (tracked only)
+ */
+function getTrackedTeamMembers() {
+  const config = getConfig();
+  return config.team_members.filter(function (m) {
+    return m.active && (m.tracking_mode || 'tracked') === 'tracked';
+  });
+}
+
+/**
+ * Get active team members excluded from tracking
+ */
+function getNotTrackedTeamMembers() {
+  const config = getConfig();
+  return config.team_members.filter(function (m) {
+    return m.active && m.tracking_mode === 'not_tracked';
+  });
 }
 
 /**
@@ -543,6 +575,12 @@ function getReportRecipients(reportType) {
       return settings.weekly_summary_recipients || [settings.manager_email];
     case 'escalation':
       return settings.escalation_recipients || [settings.manager_email, settings.ops_leader_email];
+    case 'adoption_report':
+      var adoptionRecipients = settings.adoption_report_recipients;
+      if (adoptionRecipients) {
+        return Array.isArray(adoptionRecipients) ? adoptionRecipients : [adoptionRecipients];
+      }
+      return [settings.manager_email];
     default:
       return [settings.manager_email];
   }
@@ -568,7 +606,11 @@ function loadSpecialHoursTab(ss) {
         mt_start: data[i][3] || null,
         mt_end: data[i][4] || null,
         fri_start: data[i][5] || null,
-        fri_end: data[i][6] || null
+        fri_end: data[i][6] || null,
+        mt_block2_start: data[i][7] || null,
+        mt_block2_end: data[i][8] || null,
+        fri_block2_start: data[i][9] || null,
+        fri_block2_end: data[i][10] || null
       });
     }
   }
@@ -644,4 +686,136 @@ function getOpenAIModel() {
 function getLateThresholdMin() {
   var config = getConfig();
   return parseInt(config.settings.late_threshold_min) || 15;
+}
+
+// ============================================
+// PER-USER WORK SCHEDULE
+// ============================================
+
+/**
+ * Get the work schedule for a specific user today.
+ * Returns: { blocks: [{start: 'HH:MM', end: 'HH:MM'}, ...], totalExpectedHours: N, source: string }
+ * Priority: per-user custom → active special period → global work_hours
+ */
+function getUserWorkSchedule(email) {
+  var config = getConfig();
+  var member = config.team_members.find(function (m) { return m.email === email; });
+  var today = new Date();
+  var isFriday = today.getDay() === 5;
+
+  var formatTime = function (val, defaultVal) {
+    if (!val) return defaultVal;
+    if (typeof val === 'string') return val;
+    if (val instanceof Date) {
+      return Utilities.formatDate(val, 'America/Chicago', 'HH:mm');
+    }
+    if (typeof val === 'number') {
+      var hours = Math.floor(val);
+      var mins = Math.round((val - hours) * 60);
+      return String(hours).padStart(2, '0') + ':' + String(mins).padStart(2, '0');
+    }
+    return defaultVal;
+  };
+
+  // Priority 1: Per-user custom times
+  if (member && member.custom_start_time && member.custom_end_time) {
+    var blocks = [{
+      start: formatTime(member.custom_start_time, '08:00'),
+      end: formatTime(member.custom_end_time, '17:00')
+    }];
+    if (member.custom_block2_start && member.custom_block2_end) {
+      blocks.push({
+        start: formatTime(member.custom_block2_start, '20:00'),
+        end: formatTime(member.custom_block2_end, '23:00')
+      });
+    }
+    return { blocks: blocks, totalExpectedHours: computeTotalHours(blocks), source: 'custom' };
+  }
+
+  // Priority 2: Active special period (global, e.g. Ramadan)
+  var specialPeriod = getActiveSpecialPeriod(today);
+  if (specialPeriod) {
+    var blocks = [];
+    if (isFriday) {
+      blocks.push({
+        start: formatTime(specialPeriod.fri_start, '10:00'),
+        end: formatTime(specialPeriod.fri_end, '14:00')
+      });
+      if (specialPeriod.fri_block2_start && specialPeriod.fri_block2_end) {
+        blocks.push({
+          start: formatTime(specialPeriod.fri_block2_start, '20:00'),
+          end: formatTime(specialPeriod.fri_block2_end, '23:00')
+        });
+      }
+    } else {
+      blocks.push({
+        start: formatTime(specialPeriod.mt_start, '10:00'),
+        end: formatTime(specialPeriod.mt_end, '17:00')
+      });
+      if (specialPeriod.mt_block2_start && specialPeriod.mt_block2_end) {
+        blocks.push({
+          start: formatTime(specialPeriod.mt_block2_start, '20:00'),
+          end: formatTime(specialPeriod.mt_block2_end, '23:00')
+        });
+      }
+    }
+    return { blocks: blocks, totalExpectedHours: computeTotalHours(blocks), source: 'special_period' };
+  }
+
+  // Priority 3: Default global work hours
+  if (isFriday) {
+    var friBlocks = [{
+      start: formatTime(config.work_hours.friday_start, '07:00'),
+      end: formatTime(config.work_hours.friday_end, '11:00')
+    }];
+    return { blocks: friBlocks, totalExpectedHours: parseFloat(config.work_hours.friday_hours_per_day) || computeTotalHours(friBlocks), source: 'default' };
+  }
+  var defaultBlocks = [{
+    start: formatTime(config.work_hours.default_start, '08:00'),
+    end: formatTime(config.work_hours.default_end, '17:00')
+  }];
+  return { blocks: defaultBlocks, totalExpectedHours: parseFloat(config.work_hours.default_hours_per_day) || computeTotalHours(defaultBlocks), source: 'default' };
+}
+
+/**
+ * Compute total hours across all work blocks.
+ */
+function computeTotalHours(blocks) {
+  var total = 0;
+  for (var i = 0; i < blocks.length; i++) {
+    var sParts = blocks[i].start.split(':');
+    var eParts = blocks[i].end.split(':');
+    var startMin = parseInt(sParts[0]) * 60 + parseInt(sParts[1]);
+    var endMin = parseInt(eParts[0]) * 60 + parseInt(eParts[1]);
+    if (endMin <= startMin) endMin += 24 * 60; // Handle overnight blocks
+    total += (endMin - startMin) / 60;
+  }
+  return Math.round(total * 10) / 10;
+}
+
+/**
+ * Convert "HH:MM" string to minutes since midnight.
+ */
+function timeToMinutes(timeStr) {
+  var parts = timeStr.split(':');
+  return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+}
+
+/**
+ * Check if a user has a custom (non-default) schedule.
+ */
+function hasCustomSchedule(email) {
+  var config = getConfig();
+  var member = config.team_members.find(function (m) { return m.email === email; });
+  if (!member) return false;
+  return !!member.custom_start_time;
+}
+
+/**
+ * Check if the current special period has split shifts.
+ */
+function hasActiveSplitSpecialPeriod() {
+  var specialPeriod = getActiveSpecialPeriod(new Date());
+  if (!specialPeriod) return false;
+  return !!(specialPeriod.mt_block2_start || specialPeriod.fri_block2_start);
 }
