@@ -836,6 +836,20 @@ function setupBigQueryTables() {
   } catch (e) {
     console.error('Failed to create v_eod_reports view:', e.message);
   }
+
+  // Create deduplication view for prompt_log (Append-Only Fix)
+  // logPromptResponse inserts a new row instead of UPDATE to avoid streaming buffer errors
+  try {
+    var promptViewQuery = 'CREATE OR REPLACE VIEW `' + projectId + '.' + DATASET_ID + '.v_prompt_log` AS '
+      + 'SELECT * EXCEPT(row_num) FROM ('
+      + '  SELECT *, ROW_NUMBER() OVER (PARTITION BY prompt_id ORDER BY created_at DESC) as row_num '
+      + '  FROM `' + projectId + '.' + DATASET_ID + '.prompt_log` '
+      + ') WHERE row_num = 1';
+    runBigQueryQuery(promptViewQuery);
+    console.log('Created/Updated deduplication view v_prompt_log');
+  } catch (e) {
+    console.error('Failed to create v_prompt_log view:', e.message);
+  }
 }
 
 /**
@@ -1016,6 +1030,7 @@ function logPromptSent(email, promptType) {
 /**
  * Log a prompt response from a user
  * Matches to the last sent prompt of given type and calculates latency
+ * Uses append-only INSERT instead of UPDATE to avoid BigQuery streaming buffer errors
  * @param {string} email User email
  * @param {string} promptType The prompt type to match (e.g. 'CHECKIN', 'EOD')
  */
@@ -1029,16 +1044,22 @@ function logPromptResponse(email, promptType) {
   var sentAt = new Date(promptData.sent_at);
   var latencyMinutes = Math.round((now - sentAt) / 60000 * 10) / 10;
 
-  // Update the prompt_log record in BigQuery (safe: prompt_id is UUID we generated)
+  // Append-only pattern: INSERT a new row with response data (avoids streaming buffer DML error)
+  // Use v_prompt_log view to deduplicate by prompt_id (takes latest row)
   try {
-    var query = 'UPDATE `' + getProjectId() + '.' + DATASET_ID + '.prompt_log` ' +
-      'SET response_received = true, response_at = "' + now.toISOString() +
-      '", response_latency_minutes = ' + latencyMinutes +
-      ' WHERE prompt_id = "' + promptData.prompt_id + '"';
-    runBigQueryQuery(query);
+    var row = {
+      prompt_id: promptData.prompt_id,
+      user_email: email,
+      prompt_type: promptData.prompt_type,
+      sent_at: promptData.sent_at,
+      response_received: true,
+      response_at: now.toISOString(),
+      response_latency_minutes: latencyMinutes,
+      created_at: now.toISOString()
+    };
+    insertIntoBigQuery('prompt_log', [row]);
   } catch (e) {
-    // If prompt_log table doesn't exist yet, log and continue gracefully
-    console.warn('prompt_log UPDATE failed (table may not exist yet):', e.message);
+    console.warn('prompt_log INSERT failed:', e.message);
   }
 
   cache.remove('LAST_PROMPT_' + promptType + '_' + email);
@@ -1143,7 +1164,7 @@ function createV2Tables() {
     }
   ];
 
-  tables.forEach(function(table) {
+  tables.forEach(function (table) {
     try {
       var resource = {
         tableReference: {

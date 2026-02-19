@@ -11,8 +11,8 @@ function computeDailyAdoptionMetrics() {
   var allMembers = getCachedWorkingEmployees();
   var config = getConfig();
   // Filter to tracked users only for adoption metrics
-  var teamMembers = allMembers.filter(function(m) {
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+  var teamMembers = allMembers.filter(function (m) {
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     return !fullMember || (fullMember.tracking_mode || 'tracked') === 'tracked';
   });
   var today = new Date();
@@ -21,19 +21,19 @@ function computeDailyAdoptionMetrics() {
 
   // Get today's prompts
   var promptQuery = 'SELECT user_email, prompt_type, response_received, response_latency_minutes ' +
-    'FROM `' + projectId + '.' + DATASET_ID + '.prompt_log` ' +
+    'FROM `' + projectId + '.' + DATASET_ID + '.v_prompt_log` ' +
     'WHERE DATE(sent_at, "America/Chicago") = "' + dateStr + '"';
   var prompts = runBigQueryQuery(promptQuery);
 
   // Get today's check-ins
   var todayCheckIns = getTodayCheckIns();
   var checkinMap = {};
-  todayCheckIns.forEach(function(c) { checkinMap[c.user_email] = c; });
+  todayCheckIns.forEach(function (c) { checkinMap[c.user_email] = c; });
 
   // Get today's EODs
   var todayEods = getTodayEodReports();
   var eodMap = {};
-  todayEods.forEach(function(e) { eodMap[e.user_email] = e; });
+  todayEods.forEach(function (e) { eodMap[e.user_email] = e; });
 
   // Get today's task actions (button clicks)
   var actionQuery = 'SELECT user_email, COUNT(*) as action_count ' +
@@ -42,11 +42,11 @@ function computeDailyAdoptionMetrics() {
     'GROUP BY user_email';
   var actions = runBigQueryQuery(actionQuery);
   var actionMap = {};
-  actions.forEach(function(a) { actionMap[a.user_email] = parseInt(a.action_count); });
+  actions.forEach(function (a) { actionMap[a.user_email] = parseInt(a.action_count); });
 
   // Build prompt maps
   var promptMap = {};
-  prompts.forEach(function(p) {
+  prompts.forEach(function (p) {
     if (!promptMap[p.user_email]) promptMap[p.user_email] = {};
     var type = p.prompt_type;
     if (type === 'CHECKIN' || type === 'CHECKIN_FOLLOWUP') {
@@ -73,7 +73,7 @@ function computeDailyAdoptionMetrics() {
 
   var rows = [];
 
-  teamMembers.forEach(function(member) {
+  teamMembers.forEach(function (member) {
     var email = member.email;
     var pm = promptMap[email] || {};
     var checkin = checkinMap[email];
@@ -88,7 +88,7 @@ function computeDailyAdoptionMetrics() {
 
     if (eod) {
       var rawText = eod.raw_response || eod.tasks_completed || '';
-      eodWordCount = rawText.split(/\s+/).filter(function(w) { return w.length > 0; }).length;
+      eodWordCount = rawText.split(/\s+/).filter(function (w) { return w.length > 0; }).length;
       eodHoursIncluded = eod.hours_worked !== null && eod.hours_worked !== undefined && eod.hours_worked !== '';
       eodBlockersIncluded = eod.blockers !== null && eod.blockers !== undefined && eod.blockers !== '';
       eodTomorrowIncluded = eod.tomorrow_priority !== null && eod.tomorrow_priority !== undefined && eod.tomorrow_priority !== '';
@@ -156,7 +156,7 @@ function computeWeeklyAdoptionScores() {
   var results = runBigQueryQuery(query);
   var rows = [];
 
-  results.forEach(function(r) {
+  results.forEach(function (r) {
     var daysPromptedCheckin = parseInt(r.days_prompted_checkin) || 0;
     var daysRespondedCheckin = parseInt(r.days_responded_checkin) || 0;
     var daysPromptedEod = parseInt(r.days_prompted_eod) || 0;
@@ -237,11 +237,11 @@ function generateWeeklyAdoptionReport() {
   }
 
   // Sort by adoption score ascending (worst first)
-  scores.sort(function(a, b) { return a.adoption_score - b.adoption_score; });
+  scores.sort(function (a, b) { return a.adoption_score - b.adoption_score; });
 
   var teamMembers = getCachedWorkingEmployees();
   var nameMap = {};
-  teamMembers.forEach(function(m) {
+  teamMembers.forEach(function (m) {
     nameMap[m.email] = m.name || m.email.split('@')[0];
   });
 
@@ -250,7 +250,7 @@ function generateWeeklyAdoptionReport() {
   var totalCheckinRate = 0;
   var totalEodRate = 0;
   var totalLatency = 0;
-  scores.forEach(function(s) {
+  scores.forEach(function (s) {
     totalScore += s.adoption_score;
     totalCheckinRate += s.checkin_response_rate;
     totalEodRate += s.eod_response_rate;
@@ -270,10 +270,10 @@ function generateWeeklyAdoptionReport() {
   message += 'Avg Response Time: ' + avgLatency + ' min\n\n';
 
   // Flag anyone below 70
-  var flagged = scores.filter(function(s) { return s.adoption_score < 70; });
+  var flagged = scores.filter(function (s) { return s.adoption_score < 70; });
   if (flagged.length > 0) {
     message += '🚩 *Needs Attention (Score < 70):*\n';
-    flagged.forEach(function(s) {
+    flagged.forEach(function (s) {
       var name = nameMap[s.user_email] || s.user_email;
       var gaps = [];
       if (s.checkin_response_rate < 80) gaps.push('check-in ' + s.checkin_response_rate + '%');
@@ -289,10 +289,10 @@ function generateWeeklyAdoptionReport() {
   }
 
   // Top performers
-  var topPerformers = scores.filter(function(s) { return s.adoption_score >= 90; });
+  var topPerformers = scores.filter(function (s) { return s.adoption_score >= 90; });
   if (topPerformers.length > 0) {
     message += '⭐ *Top Performers (Score 90+):*\n';
-    topPerformers.reverse().forEach(function(s) {
+    topPerformers.reverse().forEach(function (s) {
       var name = nameMap[s.user_email] || s.user_email;
       message += '  ' + name + ': ' + s.adoption_score + '/100\n';
     });
@@ -301,7 +301,7 @@ function generateWeeklyAdoptionReport() {
 
   // Full breakdown sorted by score descending
   message += '*Full Team Breakdown:*\n';
-  scores.reverse().forEach(function(s) {
+  scores.reverse().forEach(function (s) {
     var name = nameMap[s.user_email] || s.user_email;
     message += '  ' + name + ': ' + s.adoption_score + ' | CI:' + s.checkin_response_rate + '% EOD:' + s.eod_response_rate + '% Btns:' + s.button_adoption_rate + '%\n';
   });
@@ -313,7 +313,7 @@ function generateWeeklyAdoptionReport() {
     recipients = [config.settings.manager_email];
   }
 
-  recipients.forEach(function(r) {
+  recipients.forEach(function (r) {
     sendDirectMessage(r, message);
   });
 
@@ -351,15 +351,15 @@ function midweekComplianceCheck() {
   var allMembers = getCachedWorkingEmployees();
   var config2 = getConfig();
   // Filter to tracked users only
-  var teamMembers = allMembers.filter(function(m) {
-    var fullMember = config2.team_members.find(function(tm) { return tm.email === m.email; });
+  var teamMembers = allMembers.filter(function (m) {
+    var fullMember = config2.team_members.find(function (tm) { return tm.email === m.email; });
     return !fullMember || (fullMember.tracking_mode || 'tracked') === 'tracked';
   });
   var nameMap = {};
-  teamMembers.forEach(function(m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
+  teamMembers.forEach(function (m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
 
   var flagged = [];
-  results.forEach(function(r) {
+  results.forEach(function (r) {
     var daysTracked = parseInt(r.days_tracked) || 0;
     var checkins = parseInt(r.checkins) || 0;
     var eods = parseInt(r.eods) || 0;
@@ -377,8 +377,8 @@ function midweekComplianceCheck() {
 
   // Also flag anyone not in the metrics at all
   var trackedEmails = {};
-  results.forEach(function(r) { trackedEmails[r.user_email] = true; });
-  teamMembers.forEach(function(m) {
+  results.forEach(function (r) { trackedEmails[r.user_email] = true; });
+  teamMembers.forEach(function (m) {
     if (!trackedEmails[m.email]) {
       flagged.push((m.name || m.email.split('@')[0]) + ': no activity recorded this week');
     }
@@ -387,7 +387,7 @@ function midweekComplianceCheck() {
   if (flagged.length > 0) {
     var message = '⚠️ *Midweek Compliance Alert*\n\n' +
       'The following team members have compliance gaps this week:\n\n';
-    flagged.forEach(function(f) {
+    flagged.forEach(function (f) {
       message += '  ' + f + '\n';
     });
     message += '\nConsider following up before Friday.';
