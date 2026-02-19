@@ -214,6 +214,8 @@ function testSendCheckIn() {
   const tasks = getTasksForUser(email, 'today');
   const msg = getMorningCheckInMessage({ email, name: 'Test' }, tasks, false);
   sendDirectMessage(email, msg);
+  logPromptSent(email, 'CHECKIN');
+  setUserState(email, 'AWAITING_CHECKIN');
   console.log(`Check-in sent to ${email}`);
 }
 

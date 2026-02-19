@@ -166,8 +166,8 @@ Run these in the Apps Script editor (Run > select function):
 Run in the Apps Script editor:
 ```
 1. deleteAllTriggers()          ← Clean slate
-2. createScheduledTriggers()    ← Deploys all 24 triggers (23 time-based + 1 dispatcher every 30 min)
-3. listAllTriggers()            ← Verify all triggers are set (should show 24)
+2. createScheduledTriggers()    ← Deploys all 23 triggers (22 time-based + 1 dispatcher every 30 min)
+3. listAllTriggers()            ← Verify all triggers are set (should show 23)
 ```
 
 ### Step 7: Migrate (V1 Upgrade Only)
