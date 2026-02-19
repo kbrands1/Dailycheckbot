@@ -289,9 +289,9 @@ function syncEmployeesToSheet() {
   }
 
   // Prepare header row
-  const headers = ['email', 'name', 'department', 'manager_email', 'active', 'custom_start', 'custom_end', 'timezone', 'task_source', 'tracking_mode', 'custom_block2_start', 'custom_block2_end'];
+  const headers = ['email', 'name', 'department', 'manager_email', 'active', 'custom_start_time', 'custom_end_time', 'timezone', 'task_source', 'tracking_mode', 'custom_block2_start', 'custom_block2_end'];
 
-  // Get existing data to preserve custom fields (custom_start, custom_end, timezone, task_source)
+  // Get existing data to preserve custom fields (custom_start_time, custom_end_time, timezone, task_source)
   const existingData = sheet.getDataRange().getValues();
   const existingByEmail = {};
 
@@ -300,8 +300,8 @@ function syncEmployeesToSheet() {
       const email = existingData[i][0];
       if (email) {
         existingByEmail[email] = {
-          custom_start: existingData[i][5] || '',
-          custom_end: existingData[i][6] || '',
+          custom_start_time: existingData[i][5] || '',
+          custom_end_time: existingData[i][6] || '',
           timezone: existingData[i][7] || 'America/Chicago',
           task_source: existingData[i][8] || 'clickup',
           tracking_mode: existingData[i][9] || 'tracked',
@@ -321,8 +321,8 @@ function syncEmployeesToSheet() {
       emp.department || '',
       emp.manager_email || '',
       emp.status === 'active' ? 'TRUE' : 'FALSE',
-      existing.custom_start || '',
-      existing.custom_end || '',
+      existing.custom_start_time || '',
+      existing.custom_end_time || '',
       existing.timezone || 'America/Chicago',
       existing.task_source || 'clickup',
       existing.tracking_mode || 'tracked',
