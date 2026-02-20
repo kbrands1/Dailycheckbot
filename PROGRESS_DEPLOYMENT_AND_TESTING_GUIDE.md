@@ -6,7 +6,6 @@
 | # | Step | Expected Behavior |
 |---|------|-------------------|
 | 1 | DM bot: `/prep john` (use actual team member name) | Bot returns 14-day 1-on-1 prep report: attendance, tasks, delays, hours, blockers, EOD quality |
-| 2 | Non-manager DMs `/prep john` | Bot responds "only available to managers" |
 
 ### 3.3 Trigger Flow Tests (Run in Apps Script Editor)
 
@@ -14,7 +13,6 @@ Run `__testAllTriggers()` to execute all 24 triggers in sequence. Or test indivi
 
 **Morning Flow (run in order):**
 ```
-1. triggerSageHRSync()          ← Syncs employees, checks PTO
 2. triggerClickUpSync()         ← Refreshes tasks, checks overdue
 3. triggerMorningCheckIns()     ← Sends check-in prompts to all active team
 4. triggerCheckInFollowUp()     ← Sends follow-ups to non-responders

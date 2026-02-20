@@ -1228,9 +1228,13 @@ function handlePrepCommand(requesterEmail, targetName) {
   var blockers = runBigQueryQuery(blockerQuery);
 
   // Task stats
-  var taskQuery = 'SELECT action_type, COUNT(*) as cnt FROM `' + projectId + '.' + DATASET_ID + '.clickup_task_actions` ' +
-    'WHERE user_email = "' + targetEmail + '" AND DATE(timestamp) >= "' + startStr + '" ' +
-    'GROUP BY action_type';
+  var taskQuery = 'SELECT action_type, COUNT(*) as cnt FROM (' +
+    '  SELECT task_id, action_type FROM (' +
+    '    SELECT task_id, action_type, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY timestamp DESC) as rn' +
+    '    FROM `' + projectId + '.' + DATASET_ID + '.clickup_task_actions`' +
+    '    WHERE user_email = "' + targetEmail + '" AND DATE(timestamp) >= "' + startStr + '"' +
+    '  ) WHERE rn = 1' +
+    ') GROUP BY action_type';
   var taskActions = runBigQueryQuery(taskQuery);
   var taskMap = {};
   taskActions.forEach(function (a) { taskMap[a.action_type] = parseInt(a.cnt); });

@@ -182,15 +182,20 @@ function checkBacklogBuster(email) {
   var projectId = getProjectId();
   var safeEmail = sanitizeForBQ(email);
 
-  // Join task_actions with overdue_snapshots to count only overdue task completions
+  // Get latest action per task, then join with overdue_snapshots to count only tasks whose final action is COMPLETE
   var result = runBigQueryQuery(
     'SELECT DATE(a.timestamp) as action_date, COUNT(*) as completed_overdue'
-    + ' FROM `' + projectId + '.checkin_bot.clickup_task_actions` a'
+    + ' FROM ('
+    + '   SELECT task_id, user_email, action_type, timestamp FROM ('
+    + '     SELECT task_id, user_email, action_type, timestamp,'
+    + '       ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY timestamp DESC) as rn'
+    + '     FROM `' + projectId + '.checkin_bot.clickup_task_actions`'
+    + '     WHERE user_email = \'' + safeEmail + '\''
+    + '       AND timestamp >= TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), WEEK(MONDAY))'
+    + '   ) WHERE rn = 1 AND action_type = \'COMPLETE\''
+    + ' ) a'
     + ' INNER JOIN `' + projectId + '.checkin_bot.overdue_snapshots` o'
     + '   ON a.task_id = o.task_id AND a.user_email = o.user_email'
-    + ' WHERE a.user_email = \'' + safeEmail + '\''
-    + '   AND a.action_type = \'COMPLETE\''
-    + '   AND a.timestamp >= TIMESTAMP_TRUNC(CURRENT_TIMESTAMP(), WEEK(MONDAY))'
     + ' GROUP BY DATE(a.timestamp)'
     + ' HAVING COUNT(*) >= 5'
     + ' LIMIT 1'

@@ -521,11 +521,14 @@ function getUserTodayTaskActions(email) {
   const safeEmail = sanitizeForBQ(email);
 
   const query = `
-    SELECT action_type, COUNT(*) as count
-    FROM \`${projectId}.${DATASET_ID}.clickup_task_actions\`
-    WHERE user_email = '${safeEmail}'
-      AND DATE(timestamp) = '${today}'
-    GROUP BY action_type
+    SELECT action_type, COUNT(*) as count FROM (
+      SELECT task_id, action_type FROM (
+        SELECT task_id, action_type, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY timestamp DESC) as rn
+        FROM \`${projectId}.${DATASET_ID}.clickup_task_actions\`
+        WHERE user_email = '${safeEmail}'
+          AND DATE(timestamp) = '${today}'
+      ) WHERE rn = 1
+    ) GROUP BY action_type
   `;
 
   return runBigQueryQuery(query);
