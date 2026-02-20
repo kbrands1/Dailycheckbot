@@ -319,7 +319,7 @@ function buildTaskCompletionLeaderboard() {
     if (taskStats) {
       const total = parseInt(taskStats.total_due) || 0;
       const completed = parseInt(taskStats.total_completed) || 0;
-      const completionRate = total > 0 ? Math.round(completed / total * 100) : 100;
+      const completionRate = total > 0 ? Math.round(completed / total * 100) : 0;
 
       leaderboard.push({
         email: member.email,
