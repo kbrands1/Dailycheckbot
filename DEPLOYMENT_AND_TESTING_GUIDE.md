@@ -232,7 +232,7 @@ migrateDMSpaces()    ← Converts old DM_SPACES JSON blob to individual properti
 **Test F: Task Card Buttons (Requires ClickUp)**
 | # | Step | Expected Behavior |
 |---|------|-------------------|
-| 1 | Receive morning check-in with task cards | Cards show COMPLETE / TOMORROW / IN PROGRESS buttons |
+| 1 | Receive EOD prompt with task cards (or run `testSendEodRequest()`) | Cards show COMPLETE / TOMORROW / IN PROGRESS buttons |
 | 2 | Click COMPLETE | Task status updated in ClickUp, logged to BigQuery |
 | 3 | Click TOMORROW | Task due date moved +1 day, delay logged |
 

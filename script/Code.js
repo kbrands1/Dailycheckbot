@@ -176,7 +176,7 @@ function onMessage(event) {
 
     // === Fallback: check if "here" even without state (BUG #2 fix) ===
     if (['here', 'i\'m here', 'im here', 'present'].includes(lowerText) ||
-        (TEST_MODE && ['here - testing check-in flow', 'here - late test'].includes(lowerText))) {
+      (TEST_MODE && ['here - testing check-in flow', 'here - late test'].includes(lowerText))) {
       return handleCheckInResponse(sender.email, sender.displayName, text);
     }
 
@@ -428,8 +428,8 @@ function _sendMorningCheckIns(isMonday) {
   var splitSpecialActive = hasActiveSplitSpecialPeriod();
 
   // Filter to tracked users on default schedule (dispatcher handles custom/split)
-  var defaultMembers = teamMembers.filter(function(m) {
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+  var defaultMembers = teamMembers.filter(function (m) {
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (!fullMember) return true;
     if (fullMember.tracking_mode === 'not_tracked') return false;
     if (splitSpecialActive) return false; // Dispatcher handles everyone during split special periods
@@ -506,9 +506,9 @@ function _sendCheckInFollowUps() {
   }
 
   // Filter: not checked in, tracked, default schedule
-  var notCheckedIn = teamMembers.filter(function(m) {
+  var notCheckedIn = teamMembers.filter(function (m) {
     if (checkedInEmails[m.email]) return false;
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
     if (splitSpecialActive) return false;
     if (fullMember && fullMember.custom_start_time) return false;
@@ -549,9 +549,9 @@ function _postMorningSummary() {
     return { email: c.user_email, name: member ? (member.name || member.full_name) : null };
   });
   // Missing = not checked in AND tracked (not-tracked users aren't expected to check in)
-  var missing = teamMembers.filter(function(m) {
+  var missing = teamMembers.filter(function (m) {
     if (checkedInEmails[m.email]) return false;
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
     return true;
   });
@@ -617,8 +617,8 @@ function _sendEodRequests() {
   var splitSpecialActive = hasActiveSplitSpecialPeriod();
 
   // Filter to tracked users on default schedule
-  var defaultMembers = teamMembers.filter(function(m) {
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+  var defaultMembers = teamMembers.filter(function (m) {
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (!fullMember) return true;
     if (fullMember.tracking_mode === 'not_tracked') return false;
     if (splitSpecialActive) return false;
@@ -674,9 +674,9 @@ function _sendEodFollowUps() {
   }
 
   // Filter: not submitted, tracked, default schedule
-  var notSubmitted = teamMembers.filter(function(m) {
+  var notSubmitted = teamMembers.filter(function (m) {
     if (submittedEmails[m.email]) return false;
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
     if (splitSpecialActive) return false;
     if (fullMember && fullMember.custom_start_time) return false;
@@ -712,9 +712,9 @@ function _postEodSummary() {
 
   var submitted = teamMembers.filter(function (m) { return submittedEmails[m.email]; });
   // Missing = not submitted AND tracked
-  var missing = teamMembers.filter(function(m) {
+  var missing = teamMembers.filter(function (m) {
     if (submittedEmails[m.email]) return false;
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
     return true;
   });
@@ -790,7 +790,7 @@ function _postEodSummary() {
  */
 function triggerSageHRSync() {
   if (!isWorkday()) return;
-  safeExecute('SageHR Daily Sync', function() { dailySageHRSync(); });
+  safeExecute('SageHR Daily Sync', function () { dailySageHRSync(); });
 }
 
 /**
@@ -798,7 +798,7 @@ function triggerSageHRSync() {
  */
 function triggerClickUpSync() {
   if (!isWorkday()) return;
-  safeExecute('ClickUp Daily Sync', function() { dailyClickUpSync(); });
+  safeExecute('ClickUp Daily Sync', function () { dailyClickUpSync(); });
 }
 
 /**
@@ -1002,7 +1002,7 @@ function triggerAiEvaluationFriday() {
  */
 function triggerDailyAdoptionMetrics() {
   if (!isEodWorkday()) return;
-  safeExecute('Daily Adoption Metrics', function() { computeDailyAdoptionMetrics(); });
+  safeExecute('Daily Adoption Metrics', function () { computeDailyAdoptionMetrics(); });
 }
 
 /**
@@ -1014,7 +1014,7 @@ function triggerWeeklyAdoptionReport() {
   if (today.getDay() !== 5) return;
   if (!isWorkday()) return;
 
-  safeExecute('Weekly Adoption Report', function() {
+  safeExecute('Weekly Adoption Report', function () {
     computeDailyAdoptionMetrics(); // compute Friday's metrics first
     generateWeeklyAdoptionReport();
   });
@@ -1028,7 +1028,7 @@ function triggerMidweekCompliance() {
   if (today.getDay() !== 3) return; // Wednesday only
   if (!isWorkday()) return;
 
-  safeExecute('Midweek Compliance', function() { midweekComplianceCheck(); });
+  safeExecute('Midweek Compliance', function () { midweekComplianceCheck(); });
 }
 
 /**
@@ -1039,7 +1039,7 @@ function triggerDailyAdoptionMetricsFriday() {
   if (today.getDay() !== 5) return;
   if (!isWorkday()) return;
 
-  safeExecute('Friday Adoption Metrics', function() { computeDailyAdoptionMetrics(); });
+  safeExecute('Friday Adoption Metrics', function () { computeDailyAdoptionMetrics(); });
 }
 
 // ============================================
@@ -1059,8 +1059,8 @@ function triggerScheduleDispatcher() {
   var splitSpecialActive = hasActiveSplitSpecialPeriod();
 
   // Determine which users the dispatcher should handle
-  var dispatchUsers = workingEmployees.filter(function(m) {
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+  var dispatchUsers = workingEmployees.filter(function (m) {
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (!fullMember) return false;
     if ((fullMember.tracking_mode || 'tracked') !== 'tracked') return false;
     // During split special periods, dispatcher handles everyone
@@ -1136,7 +1136,7 @@ function dispatchPrompt(member, promptType, config) {
       break;
     case 'CHECKIN_FOLLOWUP':
       var todayCheckIns = getTodayCheckIns();
-      var alreadyCheckedIn = todayCheckIns.some(function(c) { return c.user_email === member.email; });
+      var alreadyCheckedIn = todayCheckIns.some(function (c) { return c.user_email === member.email; });
       if (!alreadyCheckedIn) {
         sendDirectMessage(member.email, getCheckInFollowUpMessage());
         logPromptSent(member.email, 'CHECKIN_FOLLOWUP');
@@ -1156,7 +1156,7 @@ function dispatchPrompt(member, promptType, config) {
       break;
     case 'EOD_FOLLOWUP':
       var todayEods = getTodayEodReports();
-      var alreadySubmitted = todayEods.some(function(e) { return e.user_email === member.email; });
+      var alreadySubmitted = todayEods.some(function (e) { return e.user_email === member.email; });
       if (!alreadySubmitted) {
         sendDirectMessage(member.email, getEodFollowUpMessage());
         logPromptSent(member.email, 'EOD_FOLLOWUP');
@@ -1189,7 +1189,7 @@ function handlePrepCommand(requesterEmail, targetName) {
 
   // Find team member by name (fuzzy match)
   var teamMembers = getCachedWorkingEmployees();
-  var target = teamMembers.find(function(m) {
+  var target = teamMembers.find(function (m) {
     var name = (m.name || '').toLowerCase();
     var emailPrefix = m.email.split('@')[0].toLowerCase();
     return name.includes(targetName.toLowerCase()) || emailPrefix.includes(targetName.toLowerCase());
@@ -1222,7 +1222,7 @@ function handlePrepCommand(requesterEmail, targetName) {
   var att = attendance.length > 0 ? attendance[0] : {};
 
   // Recent blockers
-  var blockerQuery = 'SELECT blockers, eod_date FROM `' + projectId + '.' + DATASET_ID + '.eod_reports` ' +
+  var blockerQuery = 'SELECT blockers, eod_date FROM `' + projectId + '.' + DATASET_ID + '.v_eod_reports` ' +
     'WHERE user_email = "' + targetEmail + '" AND eod_date >= "' + startStr + '" AND blockers IS NOT NULL AND blockers != "" ' +
     'ORDER BY eod_date DESC LIMIT 5';
   var blockers = runBigQueryQuery(blockerQuery);
@@ -1233,13 +1233,13 @@ function handlePrepCommand(requesterEmail, targetName) {
     'GROUP BY action_type';
   var taskActions = runBigQueryQuery(taskQuery);
   var taskMap = {};
-  taskActions.forEach(function(a) { taskMap[a.action_type] = parseInt(a.cnt); });
+  taskActions.forEach(function (a) { taskMap[a.action_type] = parseInt(a.cnt); });
 
   // Chronically delayed tasks
-  var delayedTasks = getChronicallyDelayedTasks().filter(function(t) { return t.user_email === targetEmail; });
+  var delayedTasks = getChronicallyDelayedTasks().filter(function (t) { return t.user_email === targetEmail; });
 
   // Hours trend
-  var hoursQuery = 'SELECT eod_date, hours_worked FROM `' + projectId + '.' + DATASET_ID + '.eod_reports` ' +
+  var hoursQuery = 'SELECT eod_date, hours_worked FROM `' + projectId + '.' + DATASET_ID + '.v_eod_reports` ' +
     'WHERE user_email = "' + targetEmail + '" AND eod_date >= "' + startStr + '" AND hours_worked IS NOT NULL ' +
     'ORDER BY eod_date';
   var hourEntries = runBigQueryQuery(hoursQuery);
@@ -1267,7 +1267,7 @@ function handlePrepCommand(requesterEmail, targetName) {
 
   if (delayedTasks.length > 0) {
     report += '*Chronically Delayed (' + delayedTasks.length + '):*\n';
-    delayedTasks.slice(0, 5).forEach(function(t) {
+    delayedTasks.slice(0, 5).forEach(function (t) {
       report += '  "' + t.task_name + '" pushed ' + t.push_count + 'x\n';
     });
   }
@@ -1275,7 +1275,7 @@ function handlePrepCommand(requesterEmail, targetName) {
   // Hours
   if (hourEntries.length > 0) {
     var totalHours = 0;
-    hourEntries.forEach(function(h) { totalHours += parseFloat(h.hours_worked) || 0; });
+    hourEntries.forEach(function (h) { totalHours += parseFloat(h.hours_worked) || 0; });
     var avgHours = Math.round(totalHours / hourEntries.length * 10) / 10;
     report += '*Hours:* Avg ' + avgHours + '/day over ' + hourEntries.length + ' days reported\n';
   }
@@ -1283,7 +1283,7 @@ function handlePrepCommand(requesterEmail, targetName) {
   // Blockers
   if (blockers.length > 0) {
     report += '\n*Recent Blockers:*\n';
-    blockers.forEach(function(b) {
+    blockers.forEach(function (b) {
       report += '  ' + b.eod_date + ': ' + b.blockers + '\n';
     });
   }

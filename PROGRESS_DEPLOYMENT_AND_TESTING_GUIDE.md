@@ -2,33 +2,6 @@
 
 ### 3.2 Message Flow Tests (DM the Bot in Google Chat)
 
-**Test C: EOD Flow**
-| # | Step | Expected Behavior |
-|---|------|-------------------|
-| 1 | Wait for EOD prompt (or run `testSendEodRequest()`) | Bot DMs you asking for EOD report |
-| 2 | Reply with a full EOD: `Completed the API integration and fixed login bug. Blocked by server access - waiting on IT. Tomorrow: deploy to staging. 7.5 hours` | Bot confirms, extracts all fields |
-| 3 | Check BigQuery `eod_reports` table | Row with tasks, blockers, tomorrow, hours_worked=7.5 |
-| 4 | Check BigQuery `prompt_log` table | Row with prompt_type=EOD, response_received=true |
-
-**Test D: Hours Follow-up**
-| # | Step | Expected Behavior |
-|---|------|-------------------|
-| 1 | Submit EOD without hours: `Done with tasks. No blockers. Deploy tomorrow.` | Bot confirms + asks for hours |
-| 2 | Reply `8` | Bot logs 8 hours, confirms |
-| 3 | Reply `30` (bad value) | Bot warns "30 hours seems too high (max 24)" |
-
-**Test E: Weekend/After-Hours Guard**
-| # | Step | Expected Behavior |
-|---|------|-------------------|
-| 1 | Message bot on Saturday or Sunday | Bot acknowledges but doesn't route to check-in/EOD flow |
-
-**Test F: Task Card Buttons (Requires ClickUp)**
-| # | Step | Expected Behavior |
-|---|------|-------------------|
-| 1 | Receive morning check-in with task cards | Cards show COMPLETE / TOMORROW / IN PROGRESS buttons |
-| 2 | Click COMPLETE | Task status updated in ClickUp, logged to BigQuery |
-| 3 | Click TOMORROW | Task due date moved +1 day, delay logged |
-
 **Test G: Manager Commands**
 | # | Step | Expected Behavior |
 |---|------|-------------------|
