@@ -1086,7 +1086,7 @@ function triggerScheduleDispatcher() {
 
         try {
           dispatchPrompt(member, promptType, config);
-          cache.put(dedupKey, 'sent', 86400);
+          cache.put(dedupKey, 'sent', 21600);
         } catch (err) {
           console.error('Dispatcher error for ' + member.email + ' ' + promptType + ':', err.message);
         }

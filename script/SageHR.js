@@ -162,7 +162,7 @@ function dailySageHRSync() {
  */
 function updateTeamMembersCache(employees) {
   const cache = CacheService.getScriptCache();
-  cache.put('working_employees', JSON.stringify(employees), 86400); // 24 hours
+  cache.put('working_employees', JSON.stringify(employees), 21600); // 6 hours
 }
 
 /**
