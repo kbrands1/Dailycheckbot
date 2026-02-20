@@ -319,7 +319,7 @@ function buildTaskCompletionLeaderboard() {
     if (taskStats) {
       const total = parseInt(taskStats.total_due) || 0;
       const completed = parseInt(taskStats.total_completed) || 0;
-      const completionRate = total > 0 ? Math.round(completed / total * 100) : 0;
+      const completionRate = total > 0 ? Math.round(completed / total * 100) : 100;
 
       leaderboard.push({
         email: member.email,
@@ -331,9 +331,12 @@ function buildTaskCompletionLeaderboard() {
     }
   }
 
-  // Sort by completion rate, then by total completed
+  // Sort by completion rate (if both have total_completed > 0), then by total completed
   leaderboard.sort((a, b) => {
-    if (b.completionRate !== a.completionRate) return b.completionRate - a.completionRate;
+    if (b.completed > 0 && a.completed > 0) {
+      if (b.completionRate !== a.completionRate) return b.completionRate - a.completionRate;
+      return b.completed - a.completed;
+    }
     return b.completed - a.completed;
   });
 
