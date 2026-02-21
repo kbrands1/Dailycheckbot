@@ -295,13 +295,33 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
 }
 
 /**
+ * Get statuses for a specific list.
+ * Uses cached workspace if available, otherwise fetches just the list directly (fast).
+ */
+function _getListStatuses(listId) {
+  // Try cached workspace first (no API call)
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get('clickup_workspace');
+  if (cached) {
+    try {
+      const structure = JSON.parse(cached);
+      if (structure.statuses && structure.statuses[listId]) {
+        return structure.statuses[listId];
+      }
+    } catch (e) { /* fall through */ }
+  }
+
+  // No cache or list not found — fetch just this list (1 API call, ~500ms)
+  console.log('Fetching statuses for list ' + listId + ' directly (no full workspace crawl)');
+  const listDetails = clickUpRequest('/list/' + listId);
+  return (listDetails && listDetails.statuses) ? listDetails.statuses : [];
+}
+
+/**
  * Get closed status for a list
  */
 function getClosedStatus(listId) {
-  const structure = getWorkspaceStructure();
-  if (!structure) return 'complete';
-
-  const statuses = structure.statuses[listId] || [];
+  const statuses = _getListStatuses(listId);
   const closed = statuses.find(s => s.type === 'closed');
   return closed ? closed.status : 'complete';
 }
@@ -310,11 +330,7 @@ function getClosedStatus(listId) {
  * Get in-progress status for a list
  */
 function getInProgressStatus(listId) {
-  const structure = getWorkspaceStructure();
-  if (!structure) return 'in progress';
-
-  const statuses = structure.statuses[listId] || [];
-  console.log('statuses = ', JSON.stringify(statuses));
+  const statuses = _getListStatuses(listId);
   var inProgress = statuses.find(s =>
     s.status.toLowerCase().includes('progress') || s.status.toLowerCase().includes('working')
   );
