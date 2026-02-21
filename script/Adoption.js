@@ -360,6 +360,7 @@ function midweekComplianceCheck() {
 
   var flagged = [];
   results.forEach(function (r) {
+    if (!nameMap[r.user_email]) return; // Skip not_tracked or unknown users
     var daysTracked = parseInt(r.days_tracked) || 0;
     var checkins = parseInt(r.checkins) || 0;
     var eods = parseInt(r.eods) || 0;

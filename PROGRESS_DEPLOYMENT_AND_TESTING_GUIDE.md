@@ -1,25 +1,6 @@
 ## Part 3: Functional Testing Guide
 
-
-### 3.3 Trigger Flow Tests (Run in Apps Script Editor)
-
-14. triggerDailyAdoptionMetricsFriday() ← Friday adoption metrics
-```
-
-### 3.4 Escalation Tests
-
-| # | Test | How to Trigger | Expected |
-|---|------|----------------|----------|
-| 4 | Chronic overdue | Move same task to "tomorrow" 3+ times | Repeat delay alert sent |
-
 ### 3.5 Split-Shift & Custom Schedule Tests
-
-**Test H: Per-User Custom Hours**
-| # | Setup | Test | Expected |
-|---|-------|------|----------|
-| 1 | Set employee `custom_start_time=10:00`, `custom_end_time=14:00` in config sheet, run `refresh` | Run `triggerScheduleDispatcher()` at 10:00 AM | Employee receives check-in prompt |
-| 2 | Same employee replies `here` at 10:20 AM | Check BigQuery `check_ins` | `is_late=true` (10:00 + 15min grace = 10:15, response at 10:20 is late) |
-| 3 | Same employee, run `triggerMorningCheckIns()` at 8:00 AM | Check if this employee gets a prompt | Should NOT get a prompt from global trigger (dispatcher handles them) |
 
 **Test I: Split-Shift (Ramadan)**
 | # | Setup | Test | Expected |
