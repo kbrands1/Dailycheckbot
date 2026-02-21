@@ -420,9 +420,14 @@ function getHolidayInfo(date = new Date()) {
 
   for (var i = 0; i < config.holidays.length; i++) {
     var h = config.holidays[i];
-    var holidayDate = h.date instanceof Date
-      ? Utilities.formatDate(h.date, 'America/Chicago', 'yyyy-MM-dd')
-      : String(h.date).substring(0, 10);
+    var holidayDate;
+    if (h.date instanceof Date) {
+      holidayDate = Utilities.formatDate(h.date, 'America/Chicago', 'yyyy-MM-dd');
+    } else if (typeof h.date === 'string' && h.date.indexOf('T') > -1) {
+      holidayDate = Utilities.formatDate(new Date(h.date), 'America/Chicago', 'yyyy-MM-dd');
+    } else {
+      holidayDate = String(h.date).substring(0, 10);
+    }
     if (holidayDate === dateStr) return h;
   }
   return null;
@@ -486,7 +491,12 @@ function getTodayWorkHours() {
   // Ensure we always return strings in HH:MM format
   const formatTime = (val, defaultVal) => {
     if (!val) return defaultVal;
-    if (typeof val === 'string') return val;
+    if (typeof val === 'string') {
+      if (val.indexOf('T') > -1) {
+        return Utilities.formatDate(new Date(val), 'America/Chicago', 'HH:mm');
+      }
+      return val;
+    }
     if (val instanceof Date) {
       return Utilities.formatDate(val, 'America/Chicago', 'HH:mm');
     }
@@ -631,12 +641,21 @@ function getActiveSpecialPeriod(date) {
 
   for (var i = 0; i < config.special_hours.length; i++) {
     var period = config.special_hours[i];
-    var startStr = period.start_date instanceof Date
-      ? Utilities.formatDate(period.start_date, 'America/Chicago', 'yyyy-MM-dd')
-      : String(period.start_date).substring(0, 10);
-    var endStr = period.end_date instanceof Date
-      ? Utilities.formatDate(period.end_date, 'America/Chicago', 'yyyy-MM-dd')
-      : String(period.end_date).substring(0, 10);
+    var startStr, endStr;
+    if (period.start_date instanceof Date) {
+      startStr = Utilities.formatDate(period.start_date, 'America/Chicago', 'yyyy-MM-dd');
+    } else if (typeof period.start_date === 'string' && period.start_date.indexOf('T') > -1) {
+      startStr = Utilities.formatDate(new Date(period.start_date), 'America/Chicago', 'yyyy-MM-dd');
+    } else {
+      startStr = String(period.start_date).substring(0, 10);
+    }
+    if (period.end_date instanceof Date) {
+      endStr = Utilities.formatDate(period.end_date, 'America/Chicago', 'yyyy-MM-dd');
+    } else if (typeof period.end_date === 'string' && period.end_date.indexOf('T') > -1) {
+      endStr = Utilities.formatDate(new Date(period.end_date), 'America/Chicago', 'yyyy-MM-dd');
+    } else {
+      endStr = String(period.end_date).substring(0, 10);
+    }
 
     if (dateStr >= startStr && dateStr <= endStr) return period;
   }
@@ -706,7 +725,12 @@ function getUserWorkSchedule(email) {
 
   var formatTime = function (val, defaultVal) {
     if (!val) return defaultVal;
-    if (typeof val === 'string') return val;
+    if (typeof val === 'string') {
+      if (val.indexOf('T') > -1) {
+        return Utilities.formatDate(new Date(val), 'America/Chicago', 'HH:mm');
+      }
+      return val;
+    }
     if (val instanceof Date) {
       return Utilities.formatDate(val, 'America/Chicago', 'HH:mm');
     }
