@@ -1,53 +1,15 @@
 ## Part 3: Functional Testing Guide
 
-### 3.2 Message Flow Tests (DM the Bot in Google Chat)
-
-**Test G: Manager Commands**
-| # | Step | Expected Behavior |
-|---|------|-------------------|
-| 1 | DM bot: `/prep john` (use actual team member name) | Bot returns 14-day 1-on-1 prep report: attendance, tasks, delays, hours, blockers, EOD quality |
 
 ### 3.3 Trigger Flow Tests (Run in Apps Script Editor)
 
-Run `__testAllTriggers()` to execute all 24 triggers in sequence. Or test individually:
-
-**Morning Flow (run in order):**
-```
-2. triggerClickUpSync()         ← Refreshes tasks, checks overdue
-3. triggerMorningCheckIns()     ← Sends check-in prompts to all active team
-4. triggerCheckInFollowUp()     ← Sends follow-ups to non-responders
-5. triggerMorningSummary()      ← Posts summary + standup digest to channel
-```
-
-**Afternoon/EOD Flow (run in order):**
-```
-6. triggerEodRequests()         ← Sends EOD prompts with task cards
-7. triggerEodFollowUp()         ← Sends follow-ups to non-submitters
-8. triggerEodSummary()          ← Posts EOD summary + EOD digest to channel
-9. triggerClickUpSnapshot()     ← Logs daily task completion metrics
-10. triggerDailyAdoptionMetrics() ← Computes adoption metrics for each user
-11. triggerAiEvaluation()       ← AI generates daily team analysis
-```
-
-**Weekly (Friday):**
-```
-12. triggerWeeklyGamification()        ← Awards badges, posts leaderboards
-13. triggerWeeklyAdoptionReport()       ← Sends adoption scores to manager
 14. triggerDailyAdoptionMetricsFriday() ← Friday adoption metrics
-```
-
-**Mid-Week (Wednesday):**
-```
-15. triggerMidweekCompliance()  ← Alerts for 2+ missed check-ins/EODs this week
 ```
 
 ### 3.4 Escalation Tests
 
 | # | Test | How to Trigger | Expected |
 |---|------|----------------|----------|
-| 1 | Missed check-in | Don't respond to check-in, run `triggerMorningSummary()` | Escalation DM to manager + logged to `escalations` table |
-| 2 | Missed EOD | Don't respond to EOD, run `triggerEodSummary()` | Escalation DM to manager |
-| 3 | Persistent blocker | Submit EODs with same blocker 2+ consecutive days, run `triggerMorningSummary()` | Manager gets persistent blocker alert |
 | 4 | Chronic overdue | Move same task to "tomorrow" 3+ times | Repeat delay alert sent |
 
 ### 3.5 Split-Shift & Custom Schedule Tests
@@ -74,24 +36,6 @@ Run `__testAllTriggers()` to execute all 24 triggers in sequence. Or test indivi
 | 3 | Run `triggerMorningSummary()` | Check morning summary in team channel | Employee should appear in "Not tracked" section, NOT in "Missing" section |
 | 4 | Run `triggerMidweekCompliance()` | Check compliance alert | Employee should NOT be flagged for missed check-ins/EODs |
 | 5 | Run `computeDailyAdoptionMetrics()` | Check `daily_adoption_metrics` table | Employee should NOT have a row (excluded from adoption tracking) |
-
-### 3.6 BigQuery Data Verification
-
-After running all tests, verify these tables have data:
-
-```sql
--- Check core tables
-SELECT COUNT(*) FROM `your_project.checkin_bot.check_ins`;
-SELECT COUNT(*) FROM `your_project.checkin_bot.eod_reports`;
-SELECT COUNT(*) FROM `your_project.checkin_bot.prompt_log`;
-SELECT COUNT(*) FROM `your_project.checkin_bot.daily_adoption_metrics`;
-
--- Check deduplication view
-SELECT * FROM `your_project.checkin_bot.v_eod_reports` WHERE eod_date = CURRENT_DATE();
-
--- Check adoption scores (after Friday run)
-SELECT * FROM `your_project.checkin_bot.weekly_adoption_scores` ORDER BY week_start DESC LIMIT 10;
-```
 
 ---
 

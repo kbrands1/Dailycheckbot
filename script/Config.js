@@ -422,7 +422,7 @@ function getHolidayInfo(date = new Date()) {
     var h = config.holidays[i];
     var holidayDate = h.date instanceof Date
       ? Utilities.formatDate(h.date, 'America/Chicago', 'yyyy-MM-dd')
-      : h.date;
+      : String(h.date).substring(0, 10);
     if (holidayDate === dateStr) return h;
   }
   return null;
@@ -633,10 +633,10 @@ function getActiveSpecialPeriod(date) {
     var period = config.special_hours[i];
     var startStr = period.start_date instanceof Date
       ? Utilities.formatDate(period.start_date, 'America/Chicago', 'yyyy-MM-dd')
-      : String(period.start_date);
+      : String(period.start_date).substring(0, 10);
     var endStr = period.end_date instanceof Date
       ? Utilities.formatDate(period.end_date, 'America/Chicago', 'yyyy-MM-dd')
-      : String(period.end_date);
+      : String(period.end_date).substring(0, 10);
 
     if (dateStr >= startStr && dateStr <= endStr) return period;
   }
