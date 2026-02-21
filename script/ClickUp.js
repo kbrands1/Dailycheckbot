@@ -297,24 +297,44 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
 /**
  * Get statuses for a specific list.
  * Uses cached workspace if available, otherwise fetches just the list directly (fast).
+ * Per-list statuses are also cached individually to avoid rate limits.
  */
 function _getListStatuses(listId) {
-  // Try cached workspace first (no API call)
   const cache = CacheService.getScriptCache();
-  const cached = cache.get('clickup_workspace');
-  if (cached) {
+
+  // Try cached workspace first (no API call)
+  const cachedWorkspace = cache.get('clickup_workspace');
+  if (cachedWorkspace) {
     try {
-      const structure = JSON.parse(cached);
+      const structure = JSON.parse(cachedWorkspace);
       if (structure.statuses && structure.statuses[listId]) {
         return structure.statuses[listId];
       }
     } catch (e) { /* fall through */ }
   }
 
-  // No cache or list not found — fetch just this list (1 API call, ~500ms)
+  // Try per-list cache (no API call)
+  const listCacheKey = 'clickup_list_statuses_' + listId;
+  const cachedList = cache.get(listCacheKey);
+  if (cachedList) {
+    try {
+      return JSON.parse(cachedList);
+    } catch (e) { /* fall through */ }
+  }
+
+  // No cache — fetch just this list (1 API call, ~500ms)
   console.log('Fetching statuses for list ' + listId + ' directly (no full workspace crawl)');
   const listDetails = clickUpRequest('/list/' + listId);
-  return (listDetails && listDetails.statuses) ? listDetails.statuses : [];
+  const statuses = (listDetails && listDetails.statuses) ? listDetails.statuses : [];
+
+  // Cache per-list statuses for 1 hour
+  try {
+    cache.put(listCacheKey, JSON.stringify(statuses), 3600);
+  } catch (e) {
+    console.warn('Failed to cache list statuses:', e);
+  }
+
+  return statuses;
 }
 
 /**
