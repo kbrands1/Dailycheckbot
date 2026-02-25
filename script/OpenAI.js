@@ -96,11 +96,91 @@ function generateDailyAiEvaluation() {
   const todayCheckIns = getTodayCheckIns();
   const todayEods = getTodayEodReports();
 
+  // --- Historical context (batched, team-level queries) ---
+  var teamAttendance = {};
+  var teamTaskHistory = {};
+  var teamHoursWeekly = {};
+  var teamHoursTrends = {};
+  var teamStreaks = {};
+  var yesterdayPriorities = {};
+  var repeatDelayed = [];
+  var lastEvaluation = null;
+
+  try {
+    var rawAttendance = getTeamWeeklyAttendanceStats();
+    rawAttendance.forEach(function(r) { teamAttendance[r.user_email] = r; });
+  } catch (e) { console.error('Historical attendance fetch failed:', e.message); }
+
+  try {
+    if (config.clickup_config.enabled) {
+      var rawTaskStats = getTeamTaskStats();
+      rawTaskStats.forEach(function(r) { teamTaskHistory[r.user_email] = r; });
+    }
+  } catch (e) { console.error('Historical task stats fetch failed:', e.message); }
+
+  try {
+    var rawHours = getWeeklyHoursData();
+    rawHours.forEach(function(r) {
+      if (!teamHoursWeekly[r.user_email]) {
+        teamHoursWeekly[r.user_email] = { totalHours: 0, daysReported: 0, dailyHours: [] };
+      }
+      var hrs = parseFloat(r.hours_worked) || 0;
+      teamHoursWeekly[r.user_email].totalHours += hrs;
+      teamHoursWeekly[r.user_email].daysReported += 1;
+      teamHoursWeekly[r.user_email].dailyHours.push(hrs);
+    });
+    for (var hEmail in teamHoursWeekly) {
+      var d = teamHoursWeekly[hEmail];
+      d.avgDaily = d.daysReported > 0 ? Math.round(d.totalHours / d.daysReported * 10) / 10 : 0;
+    }
+  } catch (e) { console.error('Weekly hours fetch failed:', e.message); }
+
+  try {
+    var rawTrends = getHoursTrends();
+    rawTrends.forEach(function(r) {
+      if (!teamHoursTrends[r.user_email]) teamHoursTrends[r.user_email] = [];
+      teamHoursTrends[r.user_email].push({
+        week_num: r.week_num,
+        avg_daily_hours: parseFloat(r.avg_daily_hours) || 0,
+        total_hours: parseFloat(r.total_hours) || 0,
+        days_reported: parseInt(r.days_reported) || 0
+      });
+    });
+  } catch (e) { console.error('Hours trends fetch failed:', e.message); }
+
+  try {
+    var rawStreaks = getTeamStreaks();
+    rawStreaks.forEach(function(r) { teamStreaks[r.user_email] = parseInt(r.streak_length) || 0; });
+  } catch (e) { console.error('Streaks fetch failed:', e.message); }
+
+  try {
+    var rawPriorities = getYesterdayEodPriorities();
+    rawPriorities.forEach(function(r) { yesterdayPriorities[r.user_email] = r.tomorrow_priority; });
+  } catch (e) { console.error('Yesterday priorities fetch failed:', e.message); }
+
+  try {
+    if (config.clickup_config.enabled) {
+      repeatDelayed = getRepeatDelayedTasks() || [];
+    }
+  } catch (e) { console.error('Repeat delayed fetch failed:', e.message); }
+
+  try {
+    lastEvaluation = getLastAiEvaluation();
+  } catch (e) { console.error('Last evaluation fetch failed:', e.message); }
+
+  console.log('Historical context loaded: attendance=' + Object.keys(teamAttendance).length
+    + ', hours=' + Object.keys(teamHoursWeekly).length
+    + ', streaks=' + Object.keys(teamStreaks).length
+    + ', priorities=' + Object.keys(yesterdayPriorities).length
+    + ', repeatDelayed=' + repeatDelayed.length
+    + ', lastEval=' + (lastEvaluation ? lastEvaluation.evaluation_date : 'none'));
+
   // Build team data for evaluation
   const teamData = teamMembers.map(member => {
     const checkIn = todayCheckIns.find(c => c.user_email === member.email);
     const eod = todayEods.find(e => e.user_email === member.email);
-    
+    var fullMember = config.team_members.find(function(tm) { return tm.email === member.email; });
+
     // Fetch tasks once for both taskStats and hours analysis
     var tasks = [];
     if (config.clickup_config.enabled) {
@@ -141,34 +221,62 @@ function generateDailyAiEvaluation() {
       }
     }
 
-    // Task details for AI to estimate expected time
-    var taskDetails = tasks ? tasks.map(function(t) {
+    // Task details for AI (capped at 5 for token efficiency)
+    var taskDetails = tasks ? tasks.slice(0, 5).map(function(t) {
       return {
         name: t.name,
-        description: (t.description || '').substring(0, 150),
+        description: (t.description || '').substring(0, 100),
         status: t.status,
         isOverdue: t.isOverdue,
         timeEstimateHrs: config.clickup_config.use_clickup_time_estimates ? t.timeEstimateHrs : null
       };
     }) : [];
 
+    // Repeat-delayed tasks for this user
+    var userRepeatDelayed = repeatDelayed.filter(function(t) { return t.user_email === member.email; });
+
     return {
       name: member.name || member.email.split('@')[0],
       email: member.email,
+
+      // Role context
+      department: member.department || (fullMember ? fullMember.department : null) || null,
+      position: member.position || null,
+      taskSource: fullMember ? fullMember.task_source : 'clickup',
+
+      // Today's data
       checkedIn: !!checkIn,
       isLate: checkIn ? checkIn.is_late : false,
       eodSubmitted: !!eod,
       eodReport: eod ? eod.tasks_completed : null,
+      blockers: eod ? eod.blockers : null,
       taskStats: taskStats,
       hoursReported: eodHours,
       clickupEstimateHrs: clickupEstimateHrs,
-      expectedHoursToday: getTodayExpectedHours(),
-      taskDetails: taskDetails
+      expectedHoursToday: getTodayExpectedHours(member.email),
+      taskDetails: taskDetails,
+
+      // Historical: attendance (last 7 days)
+      weeklyAttendance: teamAttendance[member.email] || null,
+      onTimeStreak: teamStreaks[member.email] || 0,
+
+      // Historical: hours (last 7 days + 4-week trend)
+      weeklyHours: teamHoursWeekly[member.email] || null,
+      hoursTrend: teamHoursTrends[member.email] || null,
+
+      // Historical: task throughput (last 7 days)
+      weeklyTaskStats: teamTaskHistory[member.email] || null,
+
+      // Continuity: yesterday's stated priority
+      yesterdayPriority: yesterdayPriorities[member.email] || null,
+
+      // Chronic issues
+      repeatDelayedTasks: userRepeatDelayed
     };
   });
-  
-  const prompt = buildAiEvaluationPrompt(teamData);
-  const evaluation = callOpenAI(prompt);
+
+  const prompt = buildAiEvaluationPrompt(teamData, lastEvaluation);
+  const evaluation = callOpenAI(prompt, 3000);
   
   if (!evaluation) {
     console.error('Failed to generate AI evaluation');

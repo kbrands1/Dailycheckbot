@@ -356,7 +356,7 @@ function getTodayEodReports() {
   const projectId = getProjectId();
 
   const query = `
-    SELECT user_email, eod_timestamp, tasks_completed, blockers, hours_worked
+    SELECT user_email, eod_timestamp, tasks_completed, blockers, tomorrow_priority, hours_worked
     FROM \`${projectId}.${DATASET_ID}.v_eod_reports\`
     WHERE eod_date = '${today}'
   `;
@@ -994,6 +994,107 @@ function getHoursTrends() {
     + ' GROUP BY user_email, week_num'
     + ' ORDER BY user_email, week_num';
   return runBigQueryQuery(query);
+}
+
+// ============================================
+// AI EVALUATION HISTORICAL DATA (V2)
+// ============================================
+
+/**
+ * Get weekly attendance stats for ALL team members (batched)
+ * Returns: [{user_email, checkin_days, late_days, eod_days}]
+ */
+function getTeamWeeklyAttendanceStats() {
+  var projectId = getProjectId();
+  var query = 'SELECT '
+    + '  c.user_email, '
+    + '  COUNT(DISTINCT c.checkin_date) as checkin_days, '
+    + '  SUM(CASE WHEN c.is_late THEN 1 ELSE 0 END) as late_days, '
+    + '  COUNT(DISTINCT e.eod_date) as eod_days '
+    + 'FROM `' + projectId + '.' + DATASET_ID + '.check_ins` c '
+    + 'LEFT JOIN `' + projectId + '.' + DATASET_ID + '.v_eod_reports` e '
+    + '  ON c.user_email = e.user_email AND c.checkin_date = e.eod_date '
+    + 'WHERE c.checkin_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) '
+    + 'GROUP BY c.user_email';
+  return runBigQueryQuery(query);
+}
+
+/**
+ * Get task completion stats for ALL team members (batched)
+ * Returns: [{user_email, total_due, total_completed, total_moved, total_overdue, avg_completion_rate}]
+ */
+function getTeamTaskStats() {
+  var projectId = getProjectId();
+  var query = 'SELECT '
+    + '  user_email, '
+    + '  SUM(tasks_due_today) as total_due, '
+    + '  SUM(tasks_completed_today) as total_completed, '
+    + '  SUM(tasks_moved_tomorrow) as total_moved, '
+    + '  SUM(tasks_overdue) as total_overdue, '
+    + '  ROUND(AVG(completion_rate), 1) as avg_completion_rate '
+    + 'FROM `' + projectId + '.' + DATASET_ID + '.clickup_daily_snapshot` '
+    + 'WHERE snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) '
+    + 'GROUP BY user_email';
+  return runBigQueryQuery(query);
+}
+
+/**
+ * Get on-time check-in streaks for ALL team members (batched)
+ * Returns: [{user_email, streak_length}]
+ */
+function getTeamStreaks() {
+  var projectId = getProjectId();
+  var query = 'WITH ranked AS ('
+    + '  SELECT user_email, checkin_date,'
+    + '    DATE_DIFF(checkin_date, LAG(checkin_date) OVER (PARTITION BY user_email ORDER BY checkin_date), DAY) as gap'
+    + '  FROM `' + projectId + '.' + DATASET_ID + '.check_ins`'
+    + '  WHERE checkin_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)'
+    + '  AND is_late = FALSE'
+    + '),'
+    + 'streak_breaks AS ('
+    + '  SELECT user_email, checkin_date, gap,'
+    + '    SUM(CASE WHEN gap > 3 OR gap IS NULL THEN 1 ELSE 0 END) OVER (PARTITION BY user_email ORDER BY checkin_date) as grp'
+    + '  FROM ranked'
+    + ')'
+    + ' SELECT user_email, COUNT(*) as streak_length'
+    + ' FROM streak_breaks'
+    + ' WHERE grp = (SELECT MAX(grp) FROM streak_breaks sb WHERE sb.user_email = streak_breaks.user_email)'
+    + ' GROUP BY user_email';
+  return runBigQueryQuery(query);
+}
+
+/**
+ * Get yesterday's stated priorities (tomorrow_priority) for each user
+ * Handles Monday → Friday lookback automatically
+ * Returns: [{user_email, tomorrow_priority}]
+ */
+function getYesterdayEodPriorities() {
+  var projectId = getProjectId();
+  var query = 'SELECT user_email, tomorrow_priority '
+    + 'FROM `' + projectId + '.' + DATASET_ID + '.v_eod_reports` '
+    + 'WHERE eod_date = ( '
+    + '  SELECT MAX(eod_date) FROM `' + projectId + '.' + DATASET_ID + '.v_eod_reports` '
+    + '  WHERE eod_date < CURRENT_DATE() '
+    + '  AND eod_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 4 DAY) '
+    + ') '
+    + 'AND tomorrow_priority IS NOT NULL '
+    + 'AND tomorrow_priority != ""';
+  return runBigQueryQuery(query);
+}
+
+/**
+ * Get the most recent AI evaluation for continuity
+ * Returns: {evaluation_date, evaluation_text} or null
+ */
+function getLastAiEvaluation() {
+  var projectId = getProjectId();
+  var query = 'SELECT evaluation_date, evaluation_text '
+    + 'FROM `' + projectId + '.' + DATASET_ID + '.ai_evaluations` '
+    + 'WHERE evaluation_date < CURRENT_DATE() '
+    + 'ORDER BY evaluation_date DESC '
+    + 'LIMIT 1';
+  var results = runBigQueryQuery(query);
+  return results.length > 0 ? results[0] : null;
 }
 
 // ============================================

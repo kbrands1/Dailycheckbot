@@ -315,37 +315,98 @@ function buildWeeklySummaryMessage(stats) {
 /**
  * Build AI evaluation prompt (enhanced with hours analysis)
  */
-function buildAiEvaluationPrompt(teamData) {
-  var expectedHours = teamData.length > 0 ? teamData[0].expectedHoursToday : 8;
+function buildAiEvaluationPrompt(teamData, lastEvaluation) {
+  var today = new Date();
+  var dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][today.getDay()];
 
-  var prompt = 'You are evaluating daily team performance for a remote team. Today is a ' + expectedHours + '-hour workday.\n\n';
-  prompt += 'Analyze the following data and provide a direct, specific assessment for management.\n\n';
-  prompt += '## Team Data for Today\n\n';
+  var prompt = 'You are evaluating daily team performance for a remote team. Today is ' + dayName + '.\n\n';
+  prompt += 'You have BOTH today\'s data AND historical context (last 7 days + 4-week trends). ';
+  prompt += 'Use each person\'s own historical baseline to make specific, evidence-based assessments. ';
+  prompt += 'Do NOT make generic observations — compare today to their personal patterns.\n\n';
+
+  // --- Last evaluation for continuity ---
+  if (lastEvaluation && lastEvaluation.evaluation_text) {
+    prompt += '## Previous Evaluation (' + lastEvaluation.evaluation_date + ')\n';
+    prompt += lastEvaluation.evaluation_text.substring(0, 500);
+    if (lastEvaluation.evaluation_text.length > 500) prompt += '...';
+    prompt += '\n\nNote any changes from the above — did flagged issues improve or persist?\n\n';
+  }
+
+  // --- Compute department benchmarks ---
+  var deptStats = {};
+  teamData.forEach(function(m) {
+    var dept = m.department || 'Unknown';
+    if (!deptStats[dept]) {
+      deptStats[dept] = { members: 0, totalAvgHours: 0, hoursCount: 0, totalCompleted: 0, totalDue: 0, taskCount: 0 };
+    }
+    deptStats[dept].members++;
+    if (m.weeklyHours && m.weeklyHours.avgDaily > 0) {
+      deptStats[dept].totalAvgHours += m.weeklyHours.avgDaily;
+      deptStats[dept].hoursCount++;
+    }
+    if (m.weeklyTaskStats) {
+      deptStats[dept].totalCompleted += (parseInt(m.weeklyTaskStats.total_completed) || 0);
+      deptStats[dept].totalDue += (parseInt(m.weeklyTaskStats.total_due) || 0);
+      deptStats[dept].taskCount++;
+    }
+  });
+  // Calculate averages
+  for (var dept in deptStats) {
+    var ds = deptStats[dept];
+    ds.avgHoursPerDay = ds.hoursCount > 0 ? Math.round(ds.totalAvgHours / ds.hoursCount * 10) / 10 : null;
+    ds.avgCompletionRate = ds.totalDue > 0 ? Math.round(ds.totalCompleted / ds.totalDue * 100) : null;
+  }
+
+  // Department benchmarks section
+  var deptKeys = Object.keys(deptStats).sort();
+  if (deptKeys.length > 1 || (deptKeys.length === 1 && deptKeys[0] !== 'Unknown')) {
+    prompt += '## Department Benchmarks (7-day averages)\n';
+    deptKeys.forEach(function(dept) {
+      var ds = deptStats[dept];
+      prompt += '- **' + dept + '** (' + ds.members + ' people): ';
+      if (ds.avgHoursPerDay !== null) prompt += 'avg ' + ds.avgHoursPerDay + 'h/day';
+      if (ds.avgCompletionRate !== null) prompt += ', ' + ds.avgCompletionRate + '% task completion';
+      prompt += '\n';
+    });
+    prompt += '\n';
+  }
+
+  prompt += '## Team Data\n\n';
 
   teamData.forEach(function(member) {
-    prompt += '### ' + member.name + ' (' + member.email + ')\n';
-    prompt += '- Check-in: ' + (member.checkedIn ? 'Yes' : 'NO') + (member.isLate ? ' (Late)' : '') + '\n';
-    prompt += '- EOD Submitted: ' + (member.eodSubmitted ? 'Yes' : 'NO') + '\n';
-    prompt += '- Hours Reported: ' + (member.hoursReported !== null ? member.hoursReported + 'h' : 'NOT REPORTED') + '\n';
-    prompt += '- Expected Hours: ' + expectedHours + 'h\n';
+    // Header with role context
+    prompt += '### ' + member.name + ' (' + member.email + ')';
+    if (member.department || member.position) {
+      prompt += ' | ' + (member.department || '') + (member.department && member.position ? ' - ' : '') + (member.position || '');
+    }
+    prompt += '\n';
+
+    // Today's data
+    prompt += '**Today:** Check-in: ' + (member.checkedIn ? 'Yes' : 'NO') + (member.isLate ? ' (Late)' : '');
+    prompt += ' | EOD: ' + (member.eodSubmitted ? 'Yes' : 'NO');
+    prompt += ' | Hours: ' + (member.hoursReported !== null ? member.hoursReported + 'h' : 'NOT REPORTED');
+    prompt += ' (expected: ' + member.expectedHoursToday + 'h)\n';
 
     if (member.clickupEstimateHrs !== null) {
-      prompt += '- ClickUp Time Estimates Total: ' + member.clickupEstimateHrs + 'h\n';
+      prompt += 'ClickUp Time Estimates Total: ' + member.clickupEstimateHrs + 'h\n';
     }
 
+    if (member.blockers) {
+      prompt += 'Blockers: "' + member.blockers.substring(0, 200) + '"\n';
+    }
+
+    // Task stats
     if (member.taskStats) {
-      prompt += '- Tasks due today: ' + member.taskStats.dueToday + '\n';
-      prompt += '- Tasks completed: ' + member.taskStats.completed + '\n';
-      prompt += '- Tasks delayed: ' + member.taskStats.delayed + '\n';
-      prompt += '- Overdue tasks: ' + member.taskStats.overdue + '\n';
+      prompt += 'Tasks: ' + member.taskStats.dueToday + ' due, ' + member.taskStats.completed + ' done, ' + member.taskStats.delayed + ' delayed, ' + member.taskStats.overdue + ' overdue';
       if (member.taskStats.overdue > 0) {
-        prompt += '- Oldest overdue: ' + member.taskStats.oldestOverdueDays + ' days\n';
+        prompt += ' (oldest: ' + member.taskStats.oldestOverdueDays + ' days)';
       }
+      prompt += '\n';
     }
 
-    // Full task list with details
+    // Task details (capped at 5)
     if (member.taskDetails && member.taskDetails.length > 0) {
-      prompt += '- Task List:\n';
+      prompt += 'Task List:\n';
       member.taskDetails.forEach(function(t) {
         prompt += '  * "' + t.name + '" [' + t.status + ']';
         if (t.isOverdue) prompt += ' (OVERDUE)';
@@ -356,32 +417,99 @@ function buildAiEvaluationPrompt(teamData) {
     }
 
     if (member.eodReport) {
-      prompt += '- EOD Summary: "' + member.eodReport.substring(0, 300) + '"\n';
+      prompt += 'EOD Summary: "' + member.eodReport.substring(0, 200) + '"\n';
+    }
+
+    // Follow-through check
+    if (member.yesterdayPriority) {
+      prompt += '\n**Follow-Through:** Yesterday said they\'d do: "' + member.yesterdayPriority.substring(0, 200) + '"\n';
+    }
+
+    // Historical: 7-day attendance
+    prompt += '\n**7-Day History:**\n';
+    if (member.weeklyAttendance) {
+      var wa = member.weeklyAttendance;
+      prompt += '  Attendance: ' + (parseInt(wa.checkin_days) || 0) + '/5 check-ins, ' + (parseInt(wa.late_days) || 0) + ' late, ' + (parseInt(wa.eod_days) || 0) + ' EODs';
+      prompt += ' | On-time streak: ' + member.onTimeStreak + ' days\n';
+    } else {
+      prompt += '  Attendance: No history available | Streak: ' + member.onTimeStreak + ' days\n';
+    }
+
+    // Historical: 7-day hours + department comparison
+    if (member.weeklyHours) {
+      var wh = member.weeklyHours;
+      prompt += '  Hours: avg ' + wh.avgDaily + 'h/day (' + wh.daysReported + ' days reported), total: ' + Math.round(wh.totalHours * 10) / 10 + 'h';
+      var memberDept = member.department || 'Unknown';
+      if (deptStats[memberDept] && deptStats[memberDept].avgHoursPerDay !== null && deptStats[memberDept].members > 1) {
+        prompt += ' | Dept avg: ' + deptStats[memberDept].avgHoursPerDay + 'h/day';
+      }
+      prompt += '\n';
+    } else {
+      prompt += '  Hours: No history available\n';
+    }
+
+    // Historical: 7-day task throughput + department comparison
+    if (member.weeklyTaskStats) {
+      var wt = member.weeklyTaskStats;
+      var avgRate = parseFloat(wt.avg_completion_rate) || 0;
+      prompt += '  Tasks: ' + (parseInt(wt.total_completed) || 0) + '/' + (parseInt(wt.total_due) || 0) + ' completed (' + avgRate + '%), ' + (parseInt(wt.total_moved) || 0) + ' delayed';
+      var memberDeptT = member.department || 'Unknown';
+      if (deptStats[memberDeptT] && deptStats[memberDeptT].avgCompletionRate !== null && deptStats[memberDeptT].members > 1) {
+        prompt += ' | Dept avg: ' + deptStats[memberDeptT].avgCompletionRate + '%';
+      }
+      prompt += '\n';
+    }
+
+    // 4-week hours trend (compact one-liner)
+    if (member.hoursTrend && member.hoursTrend.length > 0) {
+      prompt += '  4-Week Trend: ';
+      prompt += member.hoursTrend.map(function(w) {
+        return 'Wk' + w.week_num + ': ' + w.avg_daily_hours + 'h/day';
+      }).join(' | ');
+      prompt += '\n';
+    }
+
+    // Chronic issues
+    if (member.repeatDelayedTasks && member.repeatDelayedTasks.length > 0) {
+      prompt += '  Chronic Delays: ';
+      prompt += member.repeatDelayedTasks.map(function(t) {
+        return '"' + t.task_name + '" delayed ' + t.times_delayed + 'x';
+      }).join(', ');
+      prompt += '\n';
     }
 
     prompt += '\n';
   });
 
+  // Instructions
   prompt += '## Instructions\n\n';
   prompt += 'For each team member, provide:\n';
   prompt += '1. **Rating**: Excellent / Good / Needs Attention / Concern\n';
-  prompt += '2. **Hours Analysis**: Estimate how long the completed tasks should have taken based on task names and descriptions. Compare your estimate to reported hours. Flag discrepancies.\n';
-  prompt += '3. **Productivity Check**: Tasks completed vs tasks due relative to available hours\n';
-  prompt += '4. **Risk Flags**: List any concerns\n';
-  prompt += '5. **Recommended Action**: What management should do (if anything)\n\n';
+  prompt += '2. **Hours Analysis**: Compare reported hours to (a) their own 7-day average, (b) their department average, (c) expected hours. Flag significant deviations.\n';
+  prompt += '3. **Follow-Through**: Did they work on what they said they would yesterday? Flag mismatches.\n';
+  prompt += '4. **Productivity Check**: Today\'s output vs their own 7-day average AND their department\'s average completion rate. Is this an up or down day?\n';
+  prompt += '5. **Trend Direction**: Based on 4-week data — is this person trending up, down, or stable?\n';
+  prompt += '6. **Peer Comparison**: How does this person compare to others in the same department? Are they an outlier (high or low)?\n';
+  prompt += '7. **Risk Flags**: Specific concerns with evidence from the data.\n';
+  prompt += '8. **Recommended Action**: What management should do (if anything).\n\n';
 
   prompt += '## Patterns to Flag\n';
-  prompt += '- Reported 8h but only 1-2 small/simple tasks completed (slack)\n';
-  prompt += '- Hours < 70% of expected with no explanation\n';
-  prompt += '- Hours not reported at all\n';
-  prompt += '- Reported hours much higher than task complexity warrants (padding)\n';
-  prompt += '- 3+ overdue tasks\n';
-  prompt += '- Same task delayed 3+ times\n';
-  prompt += '- "No time" delays (may indicate overload or avoidance)\n';
-  prompt += '- Missing check-in or EOD without explanation\n';
-  prompt += '- Low hours + high output could mean underreporting (flag for praise, not concern)\n\n';
+  prompt += '- Hours significantly below their own 7-day average (not just the team standard)\n';
+  prompt += '- Declining hours trend over 4 weeks\n';
+  prompt += '- Stated priority yesterday not reflected in today\'s tasks (follow-through gap)\n';
+  prompt += '- Task completion rate below their own average\n';
+  prompt += '- On-time streak broken after 5+ days (momentum loss)\n';
+  prompt += '- Repeat-delayed tasks — same task pushed 3+ times = avoidance pattern\n';
+  prompt += '- Blockers mentioned with no management escalation\n';
+  prompt += '- Reported 8h but only 1-2 small tasks completed (compare to their typical throughput)\n';
+  prompt += '- Missing check-in or EOD — is this a one-off or pattern? Check 7-day attendance\n';
+  prompt += '- Low hours + high output = possible underreporting (flag for praise, not concern)\n';
+  prompt += '- Improvement from previous evaluation flags (acknowledge progress)\n\n';
 
-  prompt += 'Be direct and specific. Name names. This is for management, not the team.\n';
+  prompt += '- Person consistently below their department average hours or completion rate\n';
+  prompt += '- Person significantly above department average (recognize top performers)\n\n';
+  prompt += 'Be direct and specific. Name names. Reference the data — cite numbers.\n';
+  prompt += 'Compare each person to BOTH their own historical baseline AND their department peers.\n';
   prompt += 'Use markdown formatting. Keep response concise but thorough.';
 
   return prompt;
