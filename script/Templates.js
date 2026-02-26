@@ -159,6 +159,21 @@ function buildEodFeedback(feedback) {
     if (feedback.hoursWorked < feedback.expectedHours * 0.7) {
       lines.push('\n⏰ **Hours:** ' + feedback.hoursWorked + 'h reported (expected ' + feedback.expectedHours + 'h) — that\'s ' + hoursPct + '% of expected. Please ensure your hours are accurate.');
     }
+
+    // AI hours estimation mismatch
+    if (feedback.hoursEstimate && feedback.hoursEstimate.estimatedHours) {
+      var est = feedback.hoursEstimate.estimatedHours;
+      var gap = feedback.hoursWorked - est;
+      if (gap >= 2) {
+        lines.push('\n🔍 **Hours vs Output Check:** You reported ' + feedback.hoursWorked + 'h, but based on the tasks completed, the estimated effort is ~' + est + 'h.');
+        if (feedback.hoursEstimate.reasoning) {
+          lines.push('   _' + feedback.hoursEstimate.reasoning + '_');
+        }
+        lines.push('   If you worked on items not tracked in ClickUp, please mention them in your EOD so we can account for your time accurately.');
+      }
+    }
+  } else if (feedback.hoursWorked === null) {
+    lines.push('\n⚠️ **Hours not reported.** Please reply with your hours worked today (e.g. "6.5"). Daily hours reporting is required.');
   }
 
   // Follow-through check

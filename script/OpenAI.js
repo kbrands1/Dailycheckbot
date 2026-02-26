@@ -55,6 +55,46 @@ function callOpenAI(prompt, maxTokens = 2000) {
 }
 
 /**
+ * Estimate realistic hours for completed tasks using AI
+ * Returns: { estimatedHours: number, reasoning: string } or null
+ */
+function estimateTaskHours(tasks, eodText, reportedHours) {
+  if (!tasks || tasks.length === 0) return null;
+
+  var taskList = tasks.map(function(t) {
+    var line = '- "' + t.name + '" [' + (t.status || 'unknown') + ']';
+    if (t.description) line += ' — ' + (t.description || '').substring(0, 80);
+    return line;
+  }).join('\n');
+
+  var prompt = 'Estimate how many hours these tasks should realistically take for a competent professional.\n\n'
+    + 'Tasks:\n' + taskList + '\n\n'
+    + 'EOD summary: "' + (eodText || '').substring(0, 300) + '"\n'
+    + 'Reported hours: ' + reportedHours + 'h\n\n'
+    + 'Respond in JSON only: {"estimatedHours": <number>, "reasoning": "<1 sentence>"}\n'
+    + 'Be realistic — include meetings, context switching, code review time. Do NOT over-penalize.\n'
+    + 'Only flag a mismatch if the difference is significant (2+ hours gap).';
+
+  try {
+    var result = callOpenAI(prompt, 150);
+    if (!result) return null;
+
+    // Extract JSON from response
+    var jsonMatch = result.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return null;
+
+    var parsed = JSON.parse(jsonMatch[0]);
+    return {
+      estimatedHours: parseFloat(parsed.estimatedHours) || null,
+      reasoning: parsed.reasoning || null
+    };
+  } catch (e) {
+    console.error('Task hours estimation failed:', e.message);
+    return null;
+  }
+}
+
+/**
  * Parse EOD response using OpenAI for structured extraction
  * Returns { tasks_completed, blockers, tomorrow_priority, hours_worked }
  */

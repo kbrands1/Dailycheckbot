@@ -340,14 +340,15 @@ function handleEodResponse(email, name, text) {
   }
 
   // Get today's task stats
+  var tasks = [];
   try {
     if (config.clickup_config && config.clickup_config.enabled) {
       var member = config.team_members.find(function(m) { return m.email === email; });
       var taskSource = member ? member.task_source : 'clickup';
 
-      if (taskSource === 'clickup') {
-        var tasks = getTasksForUser(email, 'today');
-        if (tasks && tasks.length > 0) {
+      if (taskSource === 'clickup' || taskSource === 'both') {
+        tasks = getTasksForUser(email, 'today') || [];
+        if (tasks.length > 0) {
           var completed = tasks.filter(function(t) { return t.status && t.status.toLowerCase().includes('close'); }).length;
           var inProgress = tasks.filter(function(t) { return t.status && t.status.toLowerCase().includes('progress'); }).length;
           var overdue = tasks.filter(function(t) { return t.isOverdue; }).length;
@@ -365,6 +366,18 @@ function handleEodResponse(email, name, text) {
     console.error('Failed to fetch task stats for EOD feedback:', e.message);
   }
 
+  // AI hours estimation — compare reported hours to task complexity
+  if (hoursWorked !== null && tasks.length > 0) {
+    try {
+      var estimate = estimateTaskHours(tasks, text, hoursWorked);
+      if (estimate && estimate.estimatedHours) {
+        feedback.hoursEstimate = estimate;
+      }
+    } catch (e) {
+      console.error('Hours estimation failed:', e.message);
+    }
+  }
+
   // Get expected hours
   try {
     feedback.expectedHours = getTodayExpectedHours(email);
@@ -376,7 +389,7 @@ function handleEodResponse(email, name, text) {
   var response = isFriday ? getFridayEodConfirmation(feedback) : getEodConfirmation(feedback);
 
   if (hoursWorked === null) {
-    response += '\n\n⏰ I didn\'t catch your hours worked today. Reply with just a number (e.g. "6.5") to log your hours.';
+    response += '\n\n🚨 **Action Required:** Reply with your hours worked today (e.g. "6.5"). Hours reporting is mandatory.';
   }
 
   return createChatResponse(response);
