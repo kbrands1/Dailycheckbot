@@ -87,61 +87,6 @@ function buildTaskCard(task, index) {
 }
 
 /**
- * Build card to collect hours before completing a task
- */
-function buildCompleteWithHoursCard(taskId, listId, taskName, source) {
-  var taskSource = source || 'clickup';
-  return {
-    cardId: 'complete_hours_' + taskId,
-    card: {
-      header: {
-        title: '✅ Complete Task',
-        subtitle: taskName
-      },
-      sections: [
-        {
-          widgets: [
-            {
-              textParagraph: {
-                text: 'How many hours did you spend on this task?'
-              }
-            },
-            {
-              textInput: {
-                name: 'hoursSpent',
-                label: 'Hours spent',
-                type: 'SINGLE_LINE',
-                hintText: 'e.g. 2.5'
-              }
-            },
-            {
-              buttonList: {
-                buttons: [
-                  {
-                    text: '✅ Complete & Log Time',
-                    onClick: {
-                      action: {
-                        function: 'handleCompleteWithHours',
-                        parameters: [
-                          { key: 'taskId', value: taskId },
-                          { key: 'listId', value: listId },
-                          { key: 'taskName', value: taskName },
-                          { key: 'source', value: taskSource }
-                        ]
-                      }
-                    }
-                  }
-                ]
-              }
-            }
-          ]
-        }
-      ]
-    }
-  };
-}
-
-/**
  * Build delay reason selection card
  */
 function buildDelayReasonCard(taskId, listId, taskName, source) {
@@ -415,12 +360,12 @@ function handleTaskAction(event) {
 
   switch (action) {
     case 'COMPLETE':
-      // Show hours input card instead of completing immediately
-      var hoursCard = buildCompleteWithHoursCard(taskId, listId, taskName, source);
-      return createChatResponse({
-        actionResponse: { type: 'UPDATE_MESSAGE' },
-        cardsV2: [hoursCard]
-      });
+      result = markTaskComplete(taskId, listId, userName);
+      newStatus = getClosedStatus(listId);
+      responseText = result
+        ? `✅ Marked complete: "${taskName}"`
+        : `❌ Error updating task. Please try again.`;
+      break;
 
     case 'IN_PROGRESS':
       result = setTaskInProgress(taskId, listId, userName);
@@ -455,100 +400,6 @@ function handleTaskAction(event) {
     actionResponse: {
       type: 'UPDATE_MESSAGE'
     },
-    text: responseText
-  });
-}
-
-/**
- * Safely extract a form input value from card action event.
- * Supports both Workspace Add-on format and legacy Chat Bot format.
- */
-function _extractFormInput(event, fieldName) {
-  try {
-    var formInputs = (event.common && event.common.formInputs) ||
-                     (event.commonEventObject && event.commonEventObject.formInputs);
-    if (!formInputs || !formInputs[fieldName]) return '';
-
-    var input = formInputs[fieldName];
-    // Add-on format: formInputs.field.stringInputs.value[0]
-    if (input.stringInputs && input.stringInputs.value) {
-      return (input.stringInputs.value[0] || '').trim();
-    }
-    // Legacy format: formInputs.field[''].stringInputs.value[0]
-    if (input[''] && input[''].stringInputs && input[''].stringInputs.value) {
-      return (input[''].stringInputs.value[0] || '').trim();
-    }
-  } catch (e) {
-    console.error('Error extracting form input "' + fieldName + '":', e.message);
-  }
-  return '';
-}
-
-/**
- * Handle task completion with hours logged
- * Called when user submits the hours input card
- */
-function handleCompleteWithHours(event) {
-  var params = _extractCardParams(event);
-
-  var taskId = params.taskId;
-  var listId = params.listId;
-  var taskName = params.taskName;
-  var source = params.source || 'clickup';
-  var userEmail = event.chat.user.email;
-  var userName = event.chat.user.displayName;
-
-  // Extract hours from form input (using robust extraction)
-  var hoursRaw = _extractFormInput(event, 'hoursSpent');
-
-  // Validate hours
-  var hours = parseFloat(hoursRaw);
-  if (!hoursRaw || isNaN(hours) || hours <= 0 || hours > 24) {
-    return createChatResponse({
-      actionResponse: { type: 'UPDATE_MESSAGE' },
-      text: '⚠️ Please enter valid hours (between 0.1 and 24).',
-      cardsV2: [buildCompleteWithHoursCard(taskId, listId, taskName, source)]
-    });
-  }
-
-  // Complete the task
-  var result = markTaskComplete(taskId, listId, userName);
-
-  // Log time entry in ClickUp
-  var timeLogged = false;
-  if (result) {
-    try {
-      var durationMs = Math.round(hours * 3600000);
-      var timeResult = addTimeEntry(taskId, durationMs, userName);
-      timeLogged = !!timeResult;
-    } catch (e) {
-      console.error('Failed to log time entry:', e.message);
-    }
-  }
-
-  // Log to BigQuery
-  var task = getTaskById(taskId);
-  logTaskAction(
-    userEmail, taskId, taskName, listId,
-    task && task.list ? task.list.name : '',
-    'COMPLETE', null, null, null, null,
-    result ? 'SUCCESS' : 'FAILED', 'clickup'
-  );
-
-  var responseText;
-  if (result) {
-    responseText = '✅ Marked complete: "' + taskName + '"';
-    if (timeLogged) {
-      responseText += ' | ⏱️ ' + hours + 'h logged';
-    } else {
-      responseText += ' | ⚠️ Time entry could not be logged';
-    }
-  } else {
-    responseText = '❌ Error completing task. Please try again.';
-  }
-
-  return createChatResponse({
-    actionResponse: { type: 'UPDATE_MESSAGE' },
     text: responseText
   });
 }
