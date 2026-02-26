@@ -450,6 +450,27 @@ function setTaskInProgress(taskId, listId, userName) {
 }
 
 /**
+ * Add a time tracking entry to a task
+ * @param {string} taskId - ClickUp task ID
+ * @param {number} durationMs - Duration in milliseconds
+ * @param {string} userName - Name of the person who worked on it
+ * @returns {Object|null} API response or null on failure
+ */
+function addTimeEntry(taskId, durationMs, userName) {
+  var structure = getWorkspaceStructure();
+  if (!structure) return null;
+
+  var now = Date.now();
+  return clickUpRequest('/team/' + structure.teamId + '/time_entries', 'POST', {
+    tid: taskId,
+    description: 'Logged via Daily Check-in Bot by ' + userName,
+    duration: durationMs,
+    start: now - durationMs,
+    stop: now
+  });
+}
+
+/**
  * Get task by ID
  */
 function getTaskById(taskId) {

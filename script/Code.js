@@ -267,6 +267,8 @@ function onCardClick(event) {
       return handleDelayAction(event);
     case 'handleDelayReasonSelected':
       return handleDelayReasonSelected(event);
+    case 'handleCompleteWithHours':
+      return handleCompleteWithHours(event);
     default:
       console.warn('Unknown action: ' + actionName);
       return createChatResponse('Unknown action');
