@@ -62,33 +62,24 @@ function getCheckInFollowUpMessage() {
 }
 
 /**
- * Get EOD request message with structured card flow
- * Returns the EOD header card to start the multi-step form.
- * Also pre-caches ClickUp tasks for the card flow.
+ * Get EOD request message with tasks
  */
 function getEodRequestMessage(member, tasks) {
-  var userName = member.name || member.email.split('@')[0];
-  var dateStr = Utilities.formatDate(new Date(), 'America/Chicago', 'MMM dd, yyyy');
-  var taskList = tasks || [];
-
-  // Pre-cache ClickUp tasks in EOD state for the card flow
-  var eodState = {
-    clickUpTasks: taskList.slice(0, 10).map(function(t) {
-      return {
-        id: t.id, name: t.name, url: t.url || '',
-        status: t.status || '', listName: t.listName || '',
-        isOverdue: t.isOverdue || false, daysOverdue: t.daysOverdue || 0
-      };
-    })
-  };
-  _saveEodState(member.email, eodState);
-
-  var headerCard = buildEodHeaderCard(userName, dateStr, taskList.length);
-
+  const config = getConfig();
+  
+  if (config.clickup_config.include_in_eod && tasks && tasks.length > 0) {
+    return buildEodTaskMessage(tasks);
+  }
+  
+  // No tasks or ClickUp disabled
   return {
-    text: 'Time for your structured EOD report! \uD83D\uDCDD',
-    cardsV2: [headerCard],
-    followUpText: null
+    text: `Time for your EOD report! 📝\n\n` +
+      `Please share:\n` +
+      `1. Tasks completed today\n` +
+      `2. Blockers (if any)\n` +
+      `3. Tomorrow's priority\n\n` +
+      `⏰ Please include your hours worked today. Example: "Worked 7 hours. Completed X, Y, Z..."`,
+    cardsV2: null
   };
 }
 

@@ -123,26 +123,15 @@ function onMessage(event) {
 
     // Test commands (for development)
     if (lowerText === 'test eod' || lowerText === 'testeod') {
-      // Launch structured EOD card flow
-      var testTasks = getTasksForUser(sender.email, 'today') || [];
-      var userName = sender.displayName || sender.email.split('@')[0];
-      // Pre-cache ClickUp tasks in EOD state
-      var testState = {
-        clickUpTasks: testTasks.slice(0, 10).map(function(t) {
-          return {
-            id: t.id, name: t.name, url: t.url || '',
-            status: t.status || '', listName: t.listName || '',
-            isOverdue: t.isOverdue || false, daysOverdue: t.daysOverdue || 0
-          };
-        })
-      };
-      _saveEodState(sender.email, testState);
-      var dateStr = Utilities.formatDate(new Date(), 'America/Chicago', 'MMM dd, yyyy');
-      var headerCard = buildEodHeaderCard(userName, dateStr, testTasks.length);
-      return createChatResponse({
-        text: 'Starting structured EOD report...',
-        cardsV2: [headerCard]
-      });
+      var testTasks = getTasksForUser(sender.email, 'today');
+      var testEodMessage = getEodRequestMessage({ email: sender.email, name: sender.displayName }, testTasks);
+      if (testEodMessage.cardsV2) {
+        return createChatResponse({
+          text: testEodMessage.text,
+          cardsV2: testEodMessage.cardsV2
+        });
+      }
+      return createChatResponse(testEodMessage.text);
     }
 
     if (lowerText === 'test checkin' || lowerText === 'testcheckin') {
@@ -280,17 +269,6 @@ function onCardClick(event) {
       return handleDelayReasonSelected(event);
     case 'handleCompleteWithHours':
       return handleCompleteWithHours(event);
-    // Structured EOD card handlers
-    case 'handleEodHeader':
-      return handleEodHeader(event);
-    case 'handleEodTask':
-      return handleEodTask(event);
-    case 'handleEodMeetings':
-      return handleEodMeetings(event);
-    case 'handleEodUnplanned':
-      return handleEodUnplanned(event);
-    case 'handleEodTomorrow':
-      return handleEodTomorrow(event);
     default:
       console.warn('Unknown action: ' + actionName);
       return createChatResponse('Unknown action');
