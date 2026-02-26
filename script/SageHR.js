@@ -138,13 +138,58 @@ function dailySageHRSync() {
   const working = getWorkingEmployeesToday();
   const onLeaveCount = employees.filter(e => e.status === 'active').length - working.length;
 
+  // --- Detect new employees without DM spaces ---
+  var config = getConfig();
+  var newEmployees = [];
+  var missingDMEmployees = [];
+
+  working.forEach(function(emp) {
+    // Check if they have a DM space (can the bot message them?)
+    var dmSpace = getDMSpace(emp.email);
+    if (!dmSpace) {
+      missingDMEmployees.push(emp);
+    }
+
+    // Check if they're in the team_members sheet
+    var inSheet = config.team_members.find(function(tm) { return tm.email === emp.email; });
+    if (!inSheet) {
+      newEmployees.push(emp);
+    }
+  });
+
+  // Alert manager about new employees needing setup
+  if (missingDMEmployees.length > 0) {
+    var alertMsg = '👤 **New Employee Bot Setup Required**\n\n';
+    alertMsg += 'The following employees are active in Sage HR but haven\'t set up their bot DM yet. They need to send a message to the bot to activate it:\n\n';
+    missingDMEmployees.forEach(function(emp) {
+      var name = emp.full_name || emp.name || emp.email;
+      alertMsg += '• **' + name + '** (' + emp.email + ')';
+      var isNew = newEmployees.some(function(ne) { return ne.email === emp.email; });
+      if (isNew) alertMsg += ' — _also missing from team_members sheet_';
+      alertMsg += '\n';
+    });
+    alertMsg += '\n**Action needed:** Ask them to open a DM with the Daily Check-in Bot and send any message (e.g. "hello"). The bot will then be able to send them check-ins and EOD prompts.';
+
+    if (newEmployees.length > 0) {
+      alertMsg += '\n\nFor new employees also missing from the team_members sheet, you may want to add them with their department, task source, and schedule settings.';
+    }
+
+    try {
+      sendDirectMessage(config.settings.manager_email, alertMsg);
+    } catch (e) {
+      console.error('Failed to send new employee alert:', e.message);
+    }
+  }
+
   // Store sync results
   const syncData = {
     sync_date: new Date().toISOString(),
     total_employees: employees.length,
     active_employees: employees.filter(e => e.status === 'active').length,
     on_leave_today: onLeaveCount,
-    working_today: working.length
+    working_today: working.length,
+    missing_dm: missingDMEmployees.length,
+    new_employees: newEmployees.length
   };
 
   // Log to BigQuery
@@ -154,7 +199,7 @@ function dailySageHRSync() {
   updateTeamMembersCache(working);
 
   logSystemEvent('SAGE_HR_SYNC', 'SUCCESS', syncData);
-  console.log(`Sage HR sync complete: ${working.length} working today, ${onLeaveCount} on leave`);
+  console.log(`Sage HR sync complete: ${working.length} working today, ${onLeaveCount} on leave, ${missingDMEmployees.length} missing DM, ${newEmployees.length} new`);
 }
 
 /**
