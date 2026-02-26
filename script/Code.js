@@ -1027,12 +1027,8 @@ function _postEodSummary() {
     console.error('Error checking capacity warnings:', err.message);
   }
 
-  // Send compiled EOD batch to manager(s)
-  try {
-    _sendCompiledEodBatch(todayEods, teamMembers);
-  } catch (err) {
-    console.error('Error sending compiled EOD batch:', err.message);
-  }
+  // Compiled EOD batch is now sent dynamically after the latest shift ends
+  // (handled by _checkAndSendCompiledBatch via triggerScheduleDispatcher / triggerAiEvaluation)
 
   console.log('EOD summary posted');
 }
@@ -1088,6 +1084,80 @@ function _sendCompiledEodBatch(todayEods, teamMembers) {
   }
 
   console.log('Sent compiled EOD batch to ' + recipients.length + ' recipients');
+}
+
+/**
+ * Get the latest shift end time (in minutes since midnight) across all tracked employees today.
+ * Uses each employee's actual schedule (custom, special period, or default).
+ */
+function _getLatestShiftEndMinutes() {
+  var config = getConfig();
+  var workingEmployees = getCachedWorkingEmployees();
+  var latestEnd = 0;
+
+  for (var i = 0; i < workingEmployees.length; i++) {
+    var email = workingEmployees[i].email;
+    var fullMember = config.team_members.find(function(tm) { return tm.email === email; });
+    if (fullMember && (fullMember.tracking_mode || 'tracked') !== 'tracked') continue;
+
+    try {
+      var schedule = getUserWorkSchedule(email);
+      if (schedule && schedule.blocks && schedule.blocks.length > 0) {
+        var lastBlock = schedule.blocks[schedule.blocks.length - 1];
+        var endMin = timeToMinutes(lastBlock.end);
+        if (endMin > latestEnd) latestEnd = endMin;
+      }
+    } catch (err) {
+      console.error('Error getting schedule for ' + email + ':', err.message);
+    }
+  }
+
+  // Fallback: if no employees found or all errored, use default 5 PM (1020 min)
+  return latestEnd > 0 ? latestEnd : 17 * 60;
+}
+
+/**
+ * Check if it's time to send the compiled EOD batch and send it if so.
+ * Waits until 15 minutes after the latest employee's shift ends.
+ * Uses cache dedup to avoid sending twice in one day.
+ */
+function _checkAndSendCompiledBatch() {
+  var cache = CacheService.getScriptCache();
+  var todayStr = Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd');
+  var dedupKey = 'COMPILED_EOD_BATCH_' + todayStr;
+
+  // Already sent today?
+  if (cache.get(dedupKey)) return;
+
+  var now = new Date();
+  var nowMinutes = parseInt(Utilities.formatDate(now, 'America/Chicago', 'HH')) * 60 +
+                   parseInt(Utilities.formatDate(now, 'America/Chicago', 'mm'));
+
+  var latestEnd = _getLatestShiftEndMinutes();
+  var BUFFER = 15; // 15 minutes after last shift ends
+
+  if (nowMinutes < latestEnd + BUFFER) {
+    console.log('Compiled batch: waiting — latest shift ends at ' +
+      Math.floor(latestEnd / 60) + ':' + String(latestEnd % 60).padStart(2, '0') +
+      ', now is ' + Math.floor(nowMinutes / 60) + ':' + String(nowMinutes % 60).padStart(2, '0'));
+    return;
+  }
+
+  // Time to send — gather data and send
+  var teamMembers = getCachedWorkingEmployees();
+  var todayEods = getTodayEodReports();
+
+  if (!todayEods || todayEods.length === 0) {
+    console.log('Compiled batch: no EOD reports to send');
+    cache.put(dedupKey, 'none', 21600);
+    return;
+  }
+
+  _sendCompiledEodBatch(todayEods, teamMembers);
+  cache.put(dedupKey, 'sent', 21600); // 6 hour TTL
+
+  console.log('Compiled batch sent after latest shift end (' +
+    Math.floor(latestEnd / 60) + ':' + String(latestEnd % 60).padStart(2, '0') + ')');
 }
 
 // ============================================
@@ -1194,6 +1264,13 @@ function triggerAiEvaluation() {
   var today = new Date();
   if (today.getDay() === 5) return;
 
+  // Safety net: send compiled EOD batch if not already sent by dispatcher
+  try {
+    _checkAndSendCompiledBatch();
+  } catch (err) {
+    console.error('Error checking compiled EOD batch in AI eval trigger:', err.message);
+  }
+
   generateDailyAiEvaluation();
 }
 
@@ -1297,6 +1374,13 @@ function triggerAiEvaluationFriday() {
   if (today.getDay() !== 5) return;
   if (!isWorkday()) return;
 
+  // Safety net: send compiled EOD batch if not already sent by dispatcher
+  try {
+    _checkAndSendCompiledBatch();
+  } catch (err) {
+    console.error('Error checking compiled EOD batch in Friday AI eval:', err.message);
+  }
+
   generateDailyAiEvaluation();
   generateWeeklySummary();
 }
@@ -1362,6 +1446,13 @@ function triggerDailyAdoptionMetricsFriday() {
  */
 function triggerScheduleDispatcher() {
   if (!isWorkday()) return;
+
+  // Always check if compiled EOD batch should be sent (schedule-aware)
+  try {
+    _checkAndSendCompiledBatch();
+  } catch (err) {
+    console.error('Error checking compiled EOD batch:', err.message);
+  }
 
   var config = getConfig();
   var workingEmployees = getCachedWorkingEmployees();
