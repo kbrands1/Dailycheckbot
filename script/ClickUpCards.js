@@ -368,7 +368,7 @@ function handleTaskAction(event) {
       break;
 
     case 'IN_PROGRESS':
-      result = setTaskInProgress(taskId, listId);
+      result = setTaskInProgress(taskId, listId, userName);
       newStatus = getInProgressStatus(listId);
       responseText = result
         ? `🔄 Updated to In Progress: "${taskName}"`
@@ -434,6 +434,7 @@ function handleDelayReasonSelected(event) {
   const reason = params.reason;
   const source = params.source || 'clickup';
   const userEmail = event.chat.user.email;
+  const userName = event.chat.user.displayName;
 
   // Handle Odoo task delay
   if (source === 'odoo') {
@@ -463,7 +464,8 @@ function handleDelayReasonSelected(event) {
   const oldDueDate = task && task.due_date ? new Date(parseInt(task.due_date)) : null;
 
   // Move task to tomorrow
-  const result = moveTaskToTomorrow(taskId);
+  const reasonText = formatDelayReason(reason);
+  const result = moveTaskToTomorrow(taskId, userName, reasonText);
 
   if (result) {
     // Get delay count
@@ -506,7 +508,6 @@ function handleDelayReasonSelected(event) {
       sendRepeatDelayAlert(userEmail, taskId, taskName, delayCount);
     }
 
-    const reasonText = formatDelayReason(reason);
     return createChatResponse({
       actionResponse: {
         type: 'UPDATE_MESSAGE'

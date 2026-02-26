@@ -409,20 +409,44 @@ function markTaskComplete(taskId, listId, userName) {
 /**
  * Move task to tomorrow
  */
-function moveTaskToTomorrow(taskId) {
+function moveTaskToTomorrow(taskId, userName, reason) {
   const tomorrow = new Date();
   tomorrow.setDate(tomorrow.getDate() + 1);
   tomorrow.setHours(17, 0, 0, 0); // 5 PM tomorrow
 
-  return updateTaskDueDate(taskId, tomorrow);
+  const result = updateTaskDueDate(taskId, tomorrow);
+
+  if (result && userName) {
+    const config = getConfig();
+    if (config.clickup_config.add_comments !== false) {
+      const timestamp = Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd HH:mm:ss z');
+      var comment = `➡️ Moved to tomorrow via Daily Check-in Bot\nBy: ${userName}\nDate: ${timestamp}`;
+      if (reason) comment += `\nReason: ${reason}`;
+      addTaskComment(taskId, comment);
+    }
+  }
+
+  return result;
 }
 
 /**
  * Set task to in progress
  */
-function setTaskInProgress(taskId, listId) {
+function setTaskInProgress(taskId, listId, userName) {
   const inProgressStatus = getInProgressStatus(listId);
-  return updateTaskStatus(taskId, inProgressStatus);
+  const result = updateTaskStatus(taskId, inProgressStatus);
+
+  if (result && userName) {
+    const config = getConfig();
+    if (config.clickup_config.add_comments !== false) {
+      const timestamp = Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd HH:mm:ss z');
+      addTaskComment(taskId,
+        `🔄 Set to In Progress via Daily Check-in Bot\nBy: ${userName}\nDate: ${timestamp}`
+      );
+    }
+  }
+
+  return result;
 }
 
 /**
