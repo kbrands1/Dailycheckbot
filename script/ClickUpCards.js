@@ -464,8 +464,8 @@ function handleDelayReasonSelected(event) {
   const oldDueDate = task && task.due_date ? new Date(parseInt(task.due_date)) : null;
 
   // Move task to tomorrow
-  const reasonText = formatDelayReason(reason);
-  const result = moveTaskToTomorrow(taskId, userName, reasonText);
+  var delayReasonText = formatDelayReason(reason);
+  const result = moveTaskToTomorrow(taskId, userName, delayReasonText);
 
   if (result) {
     // Get delay count
@@ -512,7 +512,7 @@ function handleDelayReasonSelected(event) {
       actionResponse: {
         type: 'UPDATE_MESSAGE'
       },
-      text: `➡️ Moved to tomorrow: "${taskName}"\n📝 Reason: ${reasonText}`
+      text: `➡️ Moved to tomorrow: "${taskName}"\n📝 Reason: ${delayReasonText}`
     });
   } else {
     return createChatResponse({
