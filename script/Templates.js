@@ -133,23 +133,23 @@ function buildEodFeedback(feedback) {
   if (feedback.taskStats) {
     var ts = feedback.taskStats;
     var completionPct = ts.total > 0 ? Math.round(ts.completed / ts.total * 100) : 0;
-    lines.push('📊 **Today\'s Task Summary:** ' + ts.completed + '/' + ts.total + ' tasks completed (' + completionPct + '%)');
+    lines.push('📊 **Today\'s Snapshot:** ' + ts.completed + '/' + ts.total + ' tasks completed (' + completionPct + '%)');
 
     if (ts.inProgress > 0) {
       lines.push('   🔄 ' + ts.inProgress + ' still in progress');
     }
     if (ts.overdue > 0) {
-      lines.push('   ⚠️ ' + ts.overdue + ' overdue task' + (ts.overdue > 1 ? 's' : '') + ' — please prioritize these tomorrow');
+      lines.push('   ⚠️ ' + ts.overdue + ' overdue — let\'s make these a priority tomorrow');
     }
     if (ts.notStarted > 0 && ts.notStarted > ts.inProgress) {
-      lines.push('   📋 ' + ts.notStarted + ' task' + (ts.notStarted > 1 ? 's' : '') + ' not started');
+      lines.push('   📋 ' + ts.notStarted + ' not yet started');
     }
 
-    // Low completion feedback
+    // Completion feedback
     if (completionPct < 50 && ts.total >= 3) {
-      lines.push('\n💡 Less than half of your tasks were completed today. If something is blocking you, please flag it so we can help.');
+      lines.push('\n💡 Looks like it was a tough day — less than half of your tasks were completed. If something is blocking you, let us know so we can help clear the way.');
     } else if (completionPct >= 80) {
-      lines.push('\n🌟 Great productivity today!');
+      lines.push('\n🌟 Great productivity today — keep it up!');
     }
   }
 
@@ -157,7 +157,7 @@ function buildEodFeedback(feedback) {
   if (feedback.hoursWorked !== null && feedback.expectedHours) {
     var hoursPct = Math.round(feedback.hoursWorked / feedback.expectedHours * 100);
     if (feedback.hoursWorked < feedback.expectedHours * 0.7) {
-      lines.push('\n⏰ **Hours:** ' + feedback.hoursWorked + 'h reported (expected ' + feedback.expectedHours + 'h) — that\'s ' + hoursPct + '% of expected. Please ensure your hours are accurate.');
+      lines.push('\n⏰ **Hours:** ' + feedback.hoursWorked + 'h logged today (expected ' + feedback.expectedHours + 'h). Just a heads-up — that\'s ' + hoursPct + '% of your expected hours. If anything came up, no worries, just make sure your hours reflect your actual day.');
     }
 
     // AI hours estimation mismatch
@@ -165,11 +165,11 @@ function buildEodFeedback(feedback) {
       var est = feedback.hoursEstimate.estimatedHours;
       var gap = feedback.hoursWorked - est;
       if (gap >= 2) {
-        lines.push('\n🔍 **Hours vs Output Check:** You reported ' + feedback.hoursWorked + 'h, but based on the tasks completed, the estimated effort is ~' + est + 'h.');
+        lines.push('\n🔍 **Quick Note on Hours:** You logged ' + feedback.hoursWorked + 'h and the tracked tasks look like roughly ~' + est + 'h of work.');
         if (feedback.hoursEstimate.reasoning) {
           lines.push('   _' + feedback.hoursEstimate.reasoning + '_');
         }
-        lines.push('   If you worked on items not tracked in ClickUp, please mention them in your EOD so we can account for your time accurately.');
+        lines.push('   That\'s totally fine if you worked on other things — just make sure those tasks are created in ClickUp so your effort is properly tracked and visible. 🙏');
       }
     }
   } else if (feedback.hoursWorked === null) {
@@ -178,12 +178,12 @@ function buildEodFeedback(feedback) {
 
   // Follow-through check
   if (feedback.yesterdayPriority) {
-    lines.push('\n📌 **Follow-Through Check:**');
-    lines.push('Yesterday you planned: _"' + feedback.yesterdayPriority.substring(0, 200) + '"_');
+    lines.push('\n📌 **Follow-Through:**');
+    lines.push('Yesterday you planned to: _"' + feedback.yesterdayPriority.substring(0, 200) + '"_');
     if (feedback.taskStats && feedback.taskStats.completed === 0) {
-      lines.push('⚠️ No tasks were completed today — did you get to work on your planned priorities? If priorities shifted, that\'s OK but please note what changed.');
+      lines.push('It looks like none of today\'s tracked tasks were completed. If priorities shifted, that\'s OK — just note what changed so we stay aligned.');
     } else {
-      lines.push('✔️ Review: Did today\'s work align with this plan? Consistent follow-through builds momentum.');
+      lines.push('✔️ Nice — did today\'s work match this plan? Staying consistent helps build great momentum.');
     }
   }
 
