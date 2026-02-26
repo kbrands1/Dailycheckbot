@@ -208,11 +208,23 @@ function generateDailyAiEvaluation() {
     lastEvaluation = getLastAiEvaluation();
   } catch (e) { console.error('Last evaluation fetch failed:', e.message); }
 
+  // Fetch recent EOD responses for anti-gaming comparison
+  var recentResponsesMap = {};
+  try {
+    teamMembers.forEach(function(m) {
+      var recent = getRecentEodRawResponses(m.email, 7);
+      if (recent && recent.length > 0) {
+        recentResponsesMap[m.email] = recent;
+      }
+    });
+  } catch (e) { console.error('Recent EOD responses fetch failed:', e.message); }
+
   console.log('Historical context loaded: attendance=' + Object.keys(teamAttendance).length
     + ', hours=' + Object.keys(teamHoursWeekly).length
     + ', streaks=' + Object.keys(teamStreaks).length
     + ', priorities=' + Object.keys(yesterdayPriorities).length
     + ', repeatDelayed=' + repeatDelayed.length
+    + ', recentResponses=' + Object.keys(recentResponsesMap).length
     + ', lastEval=' + (lastEvaluation ? lastEvaluation.evaluation_date : 'none'));
 
   // Build team data for evaluation
@@ -272,8 +284,24 @@ function generateDailyAiEvaluation() {
       };
     }) : [];
 
+    // Per-task outcomes from card submissions (hours, outcome, deliverable)
+    var taskOutcomes = [];
+    try {
+      taskOutcomes = getUserTodayTaskOutcomes(member.email) || [];
+    } catch (e) { console.error('Task outcomes fetch failed for ' + member.email + ':', e.message); }
+
     // Repeat-delayed tasks for this user
     var userRepeatDelayed = repeatDelayed.filter(function(t) { return t.user_email === member.email; });
+
+    // Anti-gaming signals
+    var gamingSignals = null;
+    try {
+      var todayRaw = eod ? eod.raw_response : null;
+      var recentForUser = recentResponsesMap[member.email] || [];
+      if (todayRaw) {
+        gamingSignals = computeGamingSignals(member.email, todayRaw, recentForUser, taskStats, eodHours);
+      }
+    } catch (e) { console.error('Gaming signals failed for ' + member.email + ':', e.message); }
 
     return {
       name: member.name || member.email.split('@')[0],
@@ -295,6 +323,7 @@ function generateDailyAiEvaluation() {
       clickupEstimateHrs: clickupEstimateHrs,
       expectedHoursToday: getTodayExpectedHours(member.email),
       taskDetails: taskDetails,
+      taskOutcomes: taskOutcomes,
 
       // Historical: attendance (last 7 days)
       weeklyAttendance: teamAttendance[member.email] || null,
@@ -311,7 +340,10 @@ function generateDailyAiEvaluation() {
       yesterdayPriority: yesterdayPriorities[member.email] || null,
 
       // Chronic issues
-      repeatDelayedTasks: userRepeatDelayed
+      repeatDelayedTasks: userRepeatDelayed,
+
+      // Anti-gaming
+      gamingSignals: gamingSignals
     };
   });
 
@@ -551,5 +583,126 @@ function assembleHoursData(weeklyHours, hoursTrends, teamMembers) {
     expectedWeeklyTotal: expectedWeeklyTotal,
     outliers: outliers,
     trends: trends
+  };
+}
+
+// ============================================
+// ANTI-GAMING DETECTION
+// ============================================
+
+function normalizeTextForComparison(text) {
+  if (!text) return '';
+  return text.toLowerCase().replace(/[^\w\s]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function computeTextSimilarity(text1, text2) {
+  var norm1 = normalizeTextForComparison(text1);
+  var norm2 = normalizeTextForComparison(text2);
+  if (!norm1 || !norm2) return 0.0;
+
+  var words1 = norm1.split(' ');
+  var words2 = norm2.split(' ');
+  if (words1.length < 2 || words2.length < 2) return 0.0;
+
+  var bigrams1 = {};
+  var bigrams2 = {};
+  var i, j;
+
+  for (i = 0; i < words1.length - 1; i++) {
+    bigrams1[words1[i] + ' ' + words1[i + 1]] = true;
+  }
+  for (j = 0; j < words2.length - 1; j++) {
+    bigrams2[words2[j] + ' ' + words2[j + 1]] = true;
+  }
+
+  var intersection = 0;
+  var union = {};
+  var key;
+
+  for (key in bigrams1) {
+    union[key] = true;
+    if (bigrams2[key]) intersection++;
+  }
+  for (key in bigrams2) {
+    union[key] = true;
+  }
+
+  var unionSize = Object.keys(union).length;
+  return unionSize > 0 ? intersection / unionSize : 0.0;
+}
+
+function computeGamingSignals(email, todayRawResponse, recentResponses, taskStats, hoursReported) {
+  var flags = [];
+  var similarityScore = 0;
+  var mostSimilarDate = null;
+  var vagueScore = 0;
+  var vaguePhrasesFound = [];
+  var hoursTaskRatio = null;
+
+  if (!todayRawResponse) {
+    return { similarityScore: 0, mostSimilarDate: null, vagueScore: 0, vaguePhrasesFound: [], hoursTaskRatio: null, flags: [] };
+  }
+
+  // 1. Similarity check
+  if (recentResponses && recentResponses.length > 0) {
+    for (var i = 0; i < recentResponses.length; i++) {
+      var prev = recentResponses[i];
+      if (!prev.raw_response) continue;
+      var sim = computeTextSimilarity(todayRawResponse, prev.raw_response);
+      if (sim > similarityScore) {
+        similarityScore = sim;
+        mostSimilarDate = prev.eod_date;
+      }
+    }
+    if (similarityScore > 0.8) {
+      flags.push('COPY_PASTE');
+    } else if (similarityScore > 0.6) {
+      flags.push('HIGH_SIMILARITY');
+    }
+  }
+
+  // 2. Vague language
+  var lowerText = todayRawResponse.toLowerCase();
+  var vaguePatterns = ['did work', 'completed tasks', 'worked on things', 'worked on stuff',
+    'various tasks', 'same as', 'nothing new', 'did my work', 'did my job',
+    'continued work', 'busy day', 'productive day', 'all good', 'no updates'];
+  for (var v = 0; v < vaguePatterns.length; v++) {
+    if (lowerText.indexOf(vaguePatterns[v]) !== -1) {
+      vaguePhrasesFound.push(vaguePatterns[v]);
+      vagueScore++;
+    }
+  }
+
+  var wordCount = todayRawResponse.trim().split(/\s+/).length;
+  if (wordCount < 10) {
+    flags.push('VERY_SHORT');
+    vagueScore += 2;
+  } else if (wordCount < 20) {
+    flags.push('SHORT');
+    vagueScore++;
+  }
+  if (vaguePhrasesFound.length > 0) {
+    flags.push('VAGUE_LANGUAGE');
+  }
+
+  // 3. Hours inflation
+  if (hoursReported !== null && taskStats) {
+    var completedTasks = taskStats.completed || 0;
+    if (hoursReported >= 7 && completedTasks <= 1) {
+      flags.push('HOURS_INFLATION');
+      hoursTaskRatio = hoursReported + 'h / ' + completedTasks + ' tasks';
+    } else if (hoursReported >= 8 && completedTasks <= 2) {
+      flags.push('HOURS_ELEVATED');
+      hoursTaskRatio = hoursReported + 'h / ' + completedTasks + ' tasks';
+    }
+  }
+
+  return {
+    similarityScore: Math.round(similarityScore * 100) / 100,
+    mostSimilarDate: mostSimilarDate,
+    vagueScore: vagueScore,
+    vaguePhrasesFound: vaguePhrasesFound,
+    hoursTaskRatio: hoursTaskRatio,
+    flags: flags
   };
 }

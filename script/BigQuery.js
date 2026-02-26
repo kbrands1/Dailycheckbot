@@ -220,7 +220,7 @@ function logMissedCheckIn(email, date, type) {
 /**
  * Log task action from ClickUp
  */
-function logTaskAction(userEmail, taskId, taskName, listId, listName, actionType, oldStatus, newStatus, oldDueDate, newDueDate, status, source) {
+function logTaskAction(userEmail, taskId, taskName, listId, listName, actionType, oldStatus, newStatus, oldDueDate, newDueDate, status, source, outcome, deliverableLink) {
   const row = {
     action_id: Utilities.getUuid(),
     timestamp: new Date().toISOString(),
@@ -235,10 +235,28 @@ function logTaskAction(userEmail, taskId, taskName, listId, listName, actionType
     old_due_date: oldDueDate,
     new_due_date: newDueDate,
     status: status,
-    source: source || 'clickup'
+    source: source || 'clickup',
+    outcome: outcome || null,
+    deliverable_link: deliverableLink || null
   };
 
   insertIntoBigQuery('clickup_task_actions', [row]);
+}
+
+/**
+ * Get today's task actions for a user (to check if they completed any tasks)
+ */
+function getTodayTaskActions(userEmail) {
+  var projectId = getProjectId();
+  var today = Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd');
+  var query = 'SELECT action_type, task_name FROM `' + projectId + '.' + DATASET_ID + '.clickup_task_actions` ' +
+    'WHERE user_email = "' + userEmail + '" AND DATE(timestamp) = "' + today + '"';
+  try {
+    return runBigQueryQuery(query);
+  } catch (e) {
+    console.error('getTodayTaskActions failed:', e.message);
+    return [];
+  }
 }
 
 /**
@@ -535,6 +553,29 @@ function getUserTodayTaskActions(email) {
 }
 
 /**
+ * Get today's completed task outcomes for a user (for AI evaluation)
+ * Returns task name, outcome, deliverable_link, and hours logged
+ */
+function getUserTodayTaskOutcomes(email) {
+  var projectId = getProjectId();
+  var today = Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd');
+  var safeEmail = sanitizeForBQ(email);
+
+  var query = 'SELECT task_name, outcome, deliverable_link ' +
+    'FROM `' + projectId + '.' + DATASET_ID + '.clickup_task_actions` ' +
+    'WHERE user_email = \'' + safeEmail + '\' AND DATE(timestamp) = \'' + today + '\' ' +
+    'AND action_type = \'COMPLETE\' AND outcome IS NOT NULL AND outcome != \'\' ' +
+    'ORDER BY timestamp';
+
+  try {
+    return runBigQueryQuery(query);
+  } catch (e) {
+    console.error('getUserTodayTaskOutcomes failed:', e.message);
+    return [];
+  }
+}
+
+/**
  * Get real weekly stats for the team (BUG #9 fix)
  * Used by generateWeeklySummary to replace hardcoded values
  */
@@ -649,7 +690,9 @@ function setupBigQueryTables() {
       { name: 'old_due_date', type: 'STRING' },
       { name: 'new_due_date', type: 'STRING' },
       { name: 'status', type: 'STRING' },
-      { name: 'source', type: 'STRING' }
+      { name: 'source', type: 'STRING' },
+      { name: 'outcome', type: 'STRING' },
+      { name: 'deliverable_link', type: 'STRING' }
     ],
     task_delays: [
       { name: 'delay_id', type: 'STRING' },
@@ -816,6 +859,22 @@ function setupBigQueryTables() {
     console.log('Ensured source column exists in clickup_task_actions');
   } catch (e) {
     console.log('source column in clickup_task_actions may already exist or ALTER failed:', e.message);
+  }
+
+  // Add outcome + deliverable_link columns to clickup_task_actions if missing
+  try {
+    var alterOutcome = 'ALTER TABLE `' + projectId + '.' + DATASET_ID + '.clickup_task_actions` ADD COLUMN IF NOT EXISTS outcome STRING';
+    runBigQueryQuery(alterOutcome);
+    console.log('Ensured outcome column exists in clickup_task_actions');
+  } catch (e) {
+    console.log('outcome column in clickup_task_actions may already exist or ALTER failed:', e.message);
+  }
+  try {
+    var alterDeliverable = 'ALTER TABLE `' + projectId + '.' + DATASET_ID + '.clickup_task_actions` ADD COLUMN IF NOT EXISTS deliverable_link STRING';
+    runBigQueryQuery(alterDeliverable);
+    console.log('Ensured deliverable_link column exists in clickup_task_actions');
+  } catch (e) {
+    console.log('deliverable_link column in clickup_task_actions may already exist or ALTER failed:', e.message);
   }
 
   // Add source column to task_delays if missing
@@ -1309,4 +1368,24 @@ function createV2Tables() {
       }
     }
   });
+}
+
+/**
+ * Get recent EOD raw responses for a user (for anti-gaming comparison)
+ */
+function getRecentEodRawResponses(email, days) {
+  var projectId = getProjectId();
+  var safeEmail = sanitizeForBQ(email);
+  var safeDays = parseInt(days) || 7;
+
+  var query = 'SELECT eod_date, raw_response '
+    + 'FROM `' + projectId + '.' + DATASET_ID + '.v_eod_reports` '
+    + 'WHERE user_email = \'' + safeEmail + '\' '
+    + 'AND eod_date >= DATE_SUB(CURRENT_DATE(), INTERVAL ' + safeDays + ' DAY) '
+    + 'AND eod_date < CURRENT_DATE() '
+    + 'AND raw_response IS NOT NULL '
+    + 'ORDER BY eod_date DESC '
+    + 'LIMIT 5';
+
+  return runBigQueryQuery(query);
 }

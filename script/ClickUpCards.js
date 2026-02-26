@@ -219,16 +219,36 @@ function buildMorningTaskMessage(tasks, userName) {
  * Build EOD task message with cards
  */
 function buildEodTaskMessage(tasks) {
+  var eodFormatGuide = '\n📝 **After updating your task cards above, reply with:**\n' +
+    '―――――――――――――――――――\n' +
+    '*Hours:* [Total, e.g. 7h 30m]\n' +
+    '*Meetings:* [count] | [total time] | [names + durations]\n' +
+    '  _(or "0 meetings" if none)_\n' +
+    '*Tomorrow:* [Task 1 + CU link] | [Task 2 + CU link]\n' +
+    '*Blockers/Issues:* [what > owner > deadline] _(if any)_\n' +
+    '―――――――――――――――――――\n' +
+    '⚠️ You must update your task cards (✅ Done / 🔄 In Progress / ➡️ Tomorrow) before submitting.\n' +
+    'If you didn\'t complete any tasks today, explain why in your reply.';
+
   if (!tasks || tasks.length === 0) {
     return {
-      text: `Time for your EOD report! 📝\n\n✅ No tasks were due today.\n\nPlease share:\n• Any tasks you completed\n• Blockers (if any)\n• Tomorrow's priority`,
+      text: 'Time for your EOD report! 📝\n\n' +
+        '🚨 **No ClickUp tasks were due today.** If you worked on tasks not in ClickUp, please describe them.\n\n' +
+        '📝 **Reply with:**\n' +
+        '―――――――――――――――――――\n' +
+        '*Hours:* [Total, e.g. 7h 30m]\n' +
+        '*Meetings:* [count] | [total time] | [names + durations]\n' +
+        '  _(or "0 meetings" if none)_\n' +
+        '*Tomorrow:* [Task 1 + CU link] | [Task 2 + CU link]\n' +
+        '*Blockers/Issues:* [what > owner > deadline] _(if any)_\n' +
+        '―――――――――――――――――――',
       cardsV2: null
     };
   }
 
   const cards = tasks.slice(0, 10).map((task, i) => buildTaskCard(task, i)); // Limit to 10 cards
 
-  let text = `Time for your EOD report! 📝\n\n📋 **Tasks that were due today:** ${tasks.length}`;
+  let text = `Time for your EOD report! 📝\n\n📋 **Tasks due today:** ${tasks.length}\nUpdate each task card below, then reply with your EOD summary.`;
 
   if (tasks.length > 10) {
     text += `\n\n(Showing first 10 of ${tasks.length} tasks)`;
@@ -237,7 +257,7 @@ function buildEodTaskMessage(tasks) {
   return {
     text: text,
     cardsV2: cards,
-    followUpText: `\nAfter updating tasks above, please also share:\n• Any **additional tasks** you completed (not in ClickUp)\n• **Blockers** (if any)\n• **Tomorrow's priority**`
+    followUpText: eodFormatGuide
   };
 }
 
@@ -360,12 +380,12 @@ function handleTaskAction(event) {
 
   switch (action) {
     case 'COMPLETE':
-      result = markTaskComplete(taskId, listId, userName);
-      newStatus = getClosedStatus(listId);
-      responseText = result
-        ? `✅ Marked complete: "${taskName}"`
-        : `❌ Error updating task. Please try again.`;
-      break;
+      // Show hours input card instead of immediately completing
+      var hoursCard = buildCompleteWithHoursCard(taskId, listId, taskName);
+      return createChatResponse({
+        actionResponse: { type: 'UPDATE_MESSAGE' },
+        cardsV2: [hoursCard]
+      });
 
     case 'IN_PROGRESS':
       result = setTaskInProgress(taskId, listId, userName);
@@ -608,6 +628,176 @@ function handleOdooTaskAction(taskId, taskName, actionType, listId, event) {
       text: '❌ Unknown action for Odoo task'
     };
   }
+}
+
+/**
+ * Safely extract form input value from Add-on card event.
+ */
+function _extractFormInput(event, fieldName) {
+  try {
+    var formInputs = null;
+    if (event.common && event.common.formInputs) {
+      formInputs = event.common.formInputs;
+    } else if (event.commonEventObject && event.commonEventObject.formInputs) {
+      formInputs = event.commonEventObject.formInputs;
+    }
+    if (!formInputs || !formInputs[fieldName]) return '';
+
+    var input = formInputs[fieldName];
+    if (input.stringInputs && input.stringInputs.value) {
+      return (input.stringInputs.value[0] || '').trim();
+    }
+    if (input[''] && input[''].stringInputs && input[''].stringInputs.value) {
+      return (input[''].stringInputs.value[0] || '').trim();
+    }
+  } catch (e) {
+    console.error('Error extracting form input "' + fieldName + '":', e.message);
+  }
+  return '';
+}
+
+/**
+ * Build card asking for hours spent on a completed task
+ */
+function buildCompleteWithHoursCard(taskId, listId, taskName) {
+  return {
+    cardId: 'complete_hours_' + taskId,
+    card: {
+      header: {
+        title: '✅ Complete Task',
+        subtitle: taskName
+      },
+      sections: [
+        {
+          widgets: [
+            {
+              textParagraph: {
+                text: '<b>Fill in your task details:</b>'
+              }
+            },
+            {
+              textInput: {
+                label: 'Hours spent',
+                type: 'SINGLE_LINE',
+                name: 'hoursSpent',
+                hintText: 'e.g. 2.5'
+              }
+            },
+            {
+              textInput: {
+                label: 'Outcome — what was accomplished?',
+                type: 'MULTIPLE_LINE',
+                name: 'taskOutcome',
+                hintText: 'e.g. Resolved null pointer on payment form, deployed to staging'
+              }
+            },
+            {
+              textInput: {
+                label: 'Deliverable link (optional)',
+                type: 'SINGLE_LINE',
+                name: 'deliverableLink',
+                hintText: 'e.g. Drive/Figma/Sheet link (leave blank if N/A)'
+              }
+            },
+            {
+              buttonList: {
+                buttons: [
+                  {
+                    text: '✅ Complete',
+                    onClick: {
+                      action: {
+                        function: 'handleCompleteWithHours',
+                        parameters: [
+                          { key: 'taskId', value: taskId },
+                          { key: 'listId', value: listId },
+                          { key: 'taskName', value: taskName }
+                        ]
+                      }
+                    }
+                  },
+                  {
+                    text: '⏭️ Skip details',
+                    onClick: {
+                      action: {
+                        function: 'handleCompleteWithHours',
+                        parameters: [
+                          { key: 'taskId', value: taskId },
+                          { key: 'listId', value: listId },
+                          { key: 'taskName', value: taskName },
+                          { key: 'skipHours', value: 'true' }
+                        ]
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  };
+}
+
+/**
+ * Handle task completion with hours logging
+ */
+function handleCompleteWithHours(event) {
+  var params = _extractCardParams(event);
+  var taskId = params.taskId;
+  var listId = params.listId;
+  var taskName = params.taskName;
+  var skipHours = params.skipHours === 'true';
+  var userEmail = event.chat.user.email;
+  var userName = event.chat.user.displayName;
+
+  var hoursStr = _extractFormInput(event, 'hoursSpent');
+  var hours = hoursStr ? parseFloat(hoursStr) : NaN;
+  var outcome = _extractFormInput(event, 'taskOutcome') || '';
+  var deliverableLink = _extractFormInput(event, 'deliverableLink') || '';
+
+  var task = getTaskById(taskId);
+  var oldStatus = task ? (task.status && task.status.status ? task.status.status : null) : null;
+  var oldDueDate = task && task.due_date ? new Date(parseInt(task.due_date)) : null;
+
+  var result = markTaskComplete(taskId, listId, userName);
+  var newStatus = getClosedStatus(listId);
+
+  var responseText;
+  if (result) {
+    responseText = '✅ Marked complete: "' + taskName + '"';
+    if (!skipHours && !isNaN(hours) && hours > 0 && hours <= 24) {
+      var durationMs = Math.round(hours * 3600000);
+      var timeResult = addTimeEntry(taskId, durationMs, userName);
+      if (timeResult) {
+        responseText += '\n⏱️ Logged ' + hours + ' hours';
+      } else {
+        responseText += '\n⚠️ Task completed but time entry failed';
+      }
+    } else if (!skipHours && hoursStr) {
+      responseText += '\n⚠️ Invalid hours value, skipped time logging';
+    }
+    if (outcome) {
+      responseText += '\n📝 Outcome: ' + outcome;
+    }
+    if (deliverableLink) {
+      responseText += '\n🔗 Deliverable: ' + deliverableLink;
+    }
+  } else {
+    responseText = '❌ Error updating task. Please try again.';
+  }
+
+  logTaskAction(userEmail, taskId, taskName, listId,
+    task && task.list ? task.list.name : '', 'COMPLETE',
+    oldStatus, newStatus,
+    oldDueDate ? Utilities.formatDate(oldDueDate, 'America/Chicago', 'yyyy-MM-dd') : null,
+    null, result ? 'SUCCESS' : 'FAILED', 'clickup',
+    outcome, deliverableLink);
+
+  return createChatResponse({
+    actionResponse: { type: 'UPDATE_MESSAGE' },
+    text: responseText
+  });
 }
 
 // formatDelayReason is defined in Chat.js (BUG #13 fix - removed duplicate)

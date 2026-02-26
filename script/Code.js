@@ -54,6 +54,105 @@ function clearUserState(email) {
 }
 
 // ============================================
+// EOD RETRY MANAGEMENT
+// ============================================
+
+function getEodRetryCount(email) {
+  var props = PropertiesService.getScriptProperties();
+  var key = 'EOD_RETRY_' + email.replace(/[^a-zA-Z0-9]/g, '_');
+  var raw = props.getProperty(key);
+  if (!raw) return 0;
+  var parts = raw.split('|');
+  var count = parseInt(parts[0]) || 0;
+  var dateStr = parts[1] || '';
+  var today = Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd');
+  if (dateStr !== today) {
+    props.deleteProperty(key);
+    return 0;
+  }
+  return count;
+}
+
+function incrementEodRetryCount(email) {
+  var props = PropertiesService.getScriptProperties();
+  var key = 'EOD_RETRY_' + email.replace(/[^a-zA-Z0-9]/g, '_');
+  var today = Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd');
+  var current = getEodRetryCount(email);
+  props.setProperty(key, (current + 1) + '|' + today);
+  return current + 1;
+}
+
+function clearEodRetryCount(email) {
+  var props = PropertiesService.getScriptProperties();
+  props.deleteProperty('EOD_RETRY_' + email.replace(/[^a-zA-Z0-9]/g, '_'));
+}
+
+function validateEodSubmission(text) {
+  var missing = [];
+  var lowerText = text.toLowerCase();
+
+  // 1. Hours worked — total hours
+  var hours = extractHoursWorked(text);
+  if (hours === null) missing.push('hours_worked');
+
+  // 2. Meetings — must mention meetings even if 0
+  var meetingKeywords = ['meeting', 'meetings', '0 meetings', 'no meetings',
+    'standup', 'stand-up', 'sync', 'call', 'huddle', 'retro', 'sprint',
+    'planning', 'review meeting', '1-on-1', '1:1', 'workshop'];
+  var hasMeetings = meetingKeywords.some(function(kw) {
+    return lowerText.indexOf(kw) !== -1;
+  });
+  if (!hasMeetings) missing.push('meetings');
+
+  // 3. Tomorrow's priority
+  var tomorrowPriority = extractTomorrowPriority(text);
+  var tomorrowKeywords = ['tomorrow', 'next', 'plan', 'priority', 'will do',
+    'going to', 'focus on', 'continue', 'start', 'upcoming', 'next week'];
+  var hasTomorrow = tomorrowPriority !== null || tomorrowKeywords.some(function(kw) {
+    return lowerText.indexOf(kw) !== -1;
+  });
+  if (!hasTomorrow) missing.push('tomorrow_priority');
+
+  return { isValid: missing.length === 0, missingFields: missing, detectedHours: hours };
+}
+
+function buildEodRejectionMessage(missingFields, retryCount, noTasksCompleted) {
+  var msg = '⚠️ **Your EOD report is missing some required information.**\n\n';
+
+  if (noTasksCompleted) {
+    msg += '🚨 **You haven\'t completed any tasks today.** Please update your task cards above or explain why no tasks were completed.\n\n';
+  }
+
+  msg += '**Missing:**\n';
+  var fieldLabels = {
+    'hours_worked': '⏰ **Total Hours** — How many hours did you work? (e.g. "Hours: 7h 30m")',
+    'meetings': '📅 **Meetings** — List meetings with time, or say "0 meetings" if none',
+    'tomorrow_priority': '📌 **Tomorrow** — 1-3 tasks you\'ll focus on tomorrow'
+  };
+  for (var i = 0; i < missingFields.length; i++) {
+    msg += '  ' + (i + 1) + '. ' + (fieldLabels[missingFields[i]] || missingFields[i]) + '\n';
+  }
+  var attemptsLeft = 2 - retryCount;
+  if (attemptsLeft > 0) {
+    msg += '\n(' + attemptsLeft + ' attempt' + (attemptsLeft > 1 ? 's' : '') + ' remaining before auto-accept)\n';
+  }
+  msg += '\n📝 **Required format:**\n';
+  msg += '―――――――――――――――――――\n';
+  msg += '*Hours:* [Total, e.g. 7h 30m]\n';
+  msg += '*Meetings:* [count] | [total time] | [names + durations]\n';
+  msg += '  _(or "0 meetings" if none)_\n';
+  msg += '*Tomorrow:* [Task 1 + CU link] | [Task 2 + CU link]\n';
+  msg += '*Blockers/Issues:* [what > owner > deadline] _(if any)_\n';
+  msg += '―――――――――――――――――――\n';
+  msg += '\n💡 *Example:*\n';
+  msg += '_Hours: 7h 30m_\n';
+  msg += '_Meetings: 2 | 1.5h | Sprint planning (1h), Design review (30m)_\n';
+  msg += '_Tomorrow: Continue API refactor (CU link) | Start unit tests (CU link)_\n';
+  msg += '_No blockers_';
+  return msg;
+}
+
+// ============================================
 // CHAT EVENT HANDLERS
 // ============================================
 
@@ -87,7 +186,7 @@ function onMessage(event) {
 
     // Weekend/after-hours guard: acknowledge but don't process as check-in/EOD
     if (!isWorkday()) {
-      if (!['help', '?', 'ping', 'hi', 'hello'].includes(lowerText)) {
+      if (!['help', '?', 'ping', 'hi', 'hello', 'runeod', 'runcheckin'].includes(lowerText)) {
         return createChatResponse('📅 It\'s outside work hours. I\'ll be available on the next workday. If this is urgent, contact your manager directly.');
       }
     }
@@ -121,23 +220,54 @@ function onMessage(event) {
       return createChatResponse("🔄 ClickUp data refreshed!");
     }
 
-    // Test commands (for development)
-    if (lowerText === 'test eod' || lowerText === 'testeod') {
-      var testTasks = getTasksForUser(sender.email, 'today');
-      var testEodMessage = getEodRequestMessage({ email: sender.email, name: sender.displayName }, testTasks);
-      if (testEodMessage.cardsV2) {
-        return createChatResponse({
-          text: testEodMessage.text,
-          cardsV2: testEodMessage.cardsV2
-        });
+    // Test commands (for development) — single-word to avoid matching issues
+    if (lowerText === 'runeod') {
+      try {
+        var config = getConfig();
+        var eodTasks = [];
+        try {
+          if (config.clickup_config && config.clickup_config.enabled) {
+            eodTasks = getTasksForUser(sender.email, 'today');
+          }
+        } catch (taskErr) {
+          console.error('runeod: ClickUp task fetch failed:', taskErr.message);
+        }
+
+        var eodMessage = getEodRequestMessage(
+          { email: sender.email, name: sender.displayName },
+          eodTasks
+        );
+
+        // Send via REST API so tasks/cards are included
+        if (eodMessage.cardsV2) {
+          sendDirectMessage(sender.email, eodMessage.text, eodMessage.cardsV2);
+          if (eodMessage.followUpText) {
+            sendDirectMessage(sender.email, eodMessage.followUpText);
+          }
+        } else {
+          sendDirectMessage(sender.email, eodMessage.text);
+        }
+
+        // Set state so the next reply is treated as EOD submission
+        setUserState(sender.email, 'AWAITING_EOD');
+        clearEodRetryCount(sender.email);
+
+        return createChatResponse('EOD test started. Check above for your EOD prompt with tasks.');
+      } catch (eodErr) {
+        console.error('runeod error:', eodErr.message, eodErr.stack);
+        return createChatResponse('Error running EOD test: ' + eodErr.message);
       }
-      return createChatResponse(testEodMessage.text);
     }
 
-    if (lowerText === 'test checkin' || lowerText === 'testcheckin') {
-      var testCheckInTasks = getTasksForUser(sender.email, 'today');
-      var testMsg = getMorningCheckInMessage({ email: sender.email, name: sender.displayName }, testCheckInTasks, false);
-      return createChatResponse(testMsg);
+    if (lowerText === 'runcheckin') {
+      try {
+        var ciTasks = getTasksForUser(sender.email, 'today');
+        var ciMsg = getMorningCheckInMessage({ email: sender.email, name: sender.displayName }, ciTasks, false);
+        return createChatResponse(ciMsg);
+      } catch (ciErr) {
+        console.error('runcheckin error:', ciErr.message);
+        return createChatResponse('Error: ' + ciErr.message);
+      }
     }
 
     // 1-on-1 prep command
@@ -157,8 +287,31 @@ function onMessage(event) {
     }
 
     if (userState === 'AWAITING_EOD' || (TEST_MODE && lowerText === 'completed testing tasks. no blockers. tomorrow: continue testing.')) {
-      // Any reply during EOD window is treated as EOD report
+      var retryCount = getEodRetryCount(sender.email);
+      var validation = validateEodSubmission(text);
+
+      // Check if user completed any tasks today via card actions
+      var noTasksCompleted = false;
+      try {
+        var todayActions = getTodayTaskActions(sender.email);
+        var completedCount = todayActions.filter(function(a) { return a.action_type === 'COMPLETE'; }).length;
+        var anyActions = todayActions.length > 0;
+        // Flag if user had tasks shown but completed none, unless they explain why
+        if (completedCount === 0 && !lowerText.match(/no tasks|didn.t complete|couldn.t|was in meetings|sick|pto|out of office|off today/)) {
+          noTasksCompleted = true;
+        }
+      } catch (e) {
+        console.error('Task completion check failed:', e.message);
+      }
+
+      if ((!validation.isValid || noTasksCompleted) && retryCount < 2) {
+        var newCount = incrementEodRetryCount(sender.email);
+        var allMissing = validation.missingFields;
+        console.log('EOD rejected for ' + sender.email + ': missing ' + allMissing.join(', ') + (noTasksCompleted ? ' + no tasks completed' : '') + ' (retry ' + newCount + '/2)');
+        return createChatResponse(buildEodRejectionMessage(allMissing, newCount, noTasksCompleted));
+      }
       clearUserState(sender.email);
+      clearEodRetryCount(sender.email);
       return handleEodResponse(sender.email, sender.displayName, text);
     }
 
@@ -267,6 +420,8 @@ function onCardClick(event) {
       return handleDelayAction(event);
     case 'handleDelayReasonSelected':
       return handleDelayReasonSelected(event);
+    case 'handleCompleteWithHours':
+      return handleCompleteWithHours(event);
     default:
       console.warn('Unknown action: ' + actionName);
       return createChatResponse('Unknown action');
@@ -390,6 +545,41 @@ function handleEodResponse(email, name, text) {
 
   if (hoursWorked === null) {
     response += '\n\n🚨 **Action Required:** Reply with your hours worked today (e.g. "6.5"). Hours reporting is mandatory.';
+  }
+
+  // Forward EOD report + feedback to manager(s) in real-time
+  try {
+    var managerRecipients = getReportRecipients('eod_forward');
+    var displayName = name || email.split('@')[0];
+    var forwardMsg = '📨 **EOD Report from ' + displayName + '** (' + email + ')\n';
+    forwardMsg += '―――――――――――――――――――\n';
+    forwardMsg += text + '\n';
+    forwardMsg += '―――――――――――――――――――\n\n';
+    forwardMsg += '📊 **Bot Feedback:**\n' + response;
+
+    // Include task outcomes from card submissions
+    try {
+      var taskOutcomes = getTodayTaskActions(email);
+      var completedTasks = taskOutcomes.filter(function(a) { return a.action_type === 'COMPLETE'; });
+      if (completedTasks.length > 0) {
+        forwardMsg += '\n\n📋 **Task Card Actions Today:** ' + completedTasks.length + ' completed';
+        completedTasks.forEach(function(t) {
+          forwardMsg += '\n  • ' + t.task_name;
+        });
+      } else {
+        forwardMsg += '\n\n⚠️ **No tasks completed via cards today**';
+      }
+    } catch (taskErr) {
+      console.error('Failed to fetch task outcomes for manager forward:', taskErr.message);
+    }
+
+    for (var r = 0; r < managerRecipients.length; r++) {
+      if (managerRecipients[r] && managerRecipients[r] !== email) {
+        sendDirectMessage(managerRecipients[r], forwardMsg);
+      }
+    }
+  } catch (fwdErr) {
+    console.error('Failed to forward EOD to manager:', fwdErr.message);
   }
 
   return createChatResponse(response);
@@ -706,6 +896,7 @@ function _sendEodRequests() {
 
       // Set user state to AWAITING_EOD (BUG #4)
       setUserState(member.email, 'AWAITING_EOD');
+      clearEodRetryCount(member.email);
     } catch (err) {
       console.error('Error sending EOD to ' + member.email + ':', err.message);
     }
@@ -836,7 +1027,67 @@ function _postEodSummary() {
     console.error('Error checking capacity warnings:', err.message);
   }
 
+  // Send compiled EOD batch to manager(s)
+  try {
+    _sendCompiledEodBatch(todayEods, teamMembers);
+  } catch (err) {
+    console.error('Error sending compiled EOD batch:', err.message);
+  }
+
   console.log('EOD summary posted');
+}
+
+/**
+ * Send compiled EOD batch to manager(s) — all reports in one message
+ */
+function _sendCompiledEodBatch(todayEods, teamMembers) {
+  if (!todayEods || todayEods.length === 0) return;
+
+  var recipients = getReportRecipients('eod_forward');
+  if (!recipients || recipients.length === 0) return;
+
+  var today = Utilities.formatDate(new Date(), 'America/Chicago', 'EEEE, MMMM d');
+  var nameMap = {};
+  teamMembers.forEach(function(m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
+
+  var batch = '📋 **Compiled EOD Reports — ' + today + '**\n';
+  batch += todayEods.length + ' reports received\n';
+  batch += '═══════════════════════════\n\n';
+
+  todayEods.forEach(function(eod) {
+    var name = nameMap[eod.user_email] || eod.user_email.split('@')[0];
+    var hours = eod.hours_worked !== null && eod.hours_worked !== undefined ? eod.hours_worked + 'h' : 'not reported';
+
+    batch += '👤 **' + name + '** | ' + hours + '\n';
+
+    if (eod.raw_response) {
+      // Truncate long reports
+      var report = eod.raw_response.length > 300 ? eod.raw_response.substring(0, 300) + '...' : eod.raw_response;
+      batch += report + '\n';
+    } else if (eod.tasks_completed) {
+      batch += eod.tasks_completed.substring(0, 200) + '\n';
+    }
+
+    if (eod.blockers) {
+      batch += '🚫 Blocker: ' + eod.blockers + '\n';
+    }
+    if (eod.tomorrow_priority) {
+      batch += '📌 Tomorrow: ' + eod.tomorrow_priority + '\n';
+    }
+
+    batch += '―――――――――――――――――――\n';
+  });
+
+  // Send to each manager recipient
+  for (var i = 0; i < recipients.length; i++) {
+    try {
+      sendDirectMessage(recipients[i], batch);
+    } catch (err) {
+      console.error('Error sending EOD batch to ' + recipients[i] + ':', err.message);
+    }
+  }
+
+  console.log('Sent compiled EOD batch to ' + recipients.length + ' recipients');
 }
 
 // ============================================
@@ -1211,6 +1462,7 @@ function dispatchPrompt(member, promptType, config) {
       }
       logPromptSent(member.email, 'EOD');
       setUserState(member.email, 'AWAITING_EOD');
+      clearEodRetryCount(member.email);
       break;
     case 'EOD_FOLLOWUP':
       var todayEods = getTodayEodReports();

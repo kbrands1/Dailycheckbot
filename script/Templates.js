@@ -73,12 +73,16 @@ function getEodRequestMessage(member, tasks) {
   
   // No tasks or ClickUp disabled
   return {
-    text: `Time for your EOD report! 📝\n\n` +
-      `Please share:\n` +
-      `1. Tasks completed today\n` +
-      `2. Blockers (if any)\n` +
-      `3. Tomorrow's priority\n\n` +
-      `⏰ Please include your hours worked today. Example: "Worked 7 hours. Completed X, Y, Z..."`,
+    text: 'Time for your EOD report! 📝\n\n' +
+      '🚨 **No ClickUp tasks found.** If you worked on tasks not in ClickUp, please describe them.\n\n' +
+      '📝 **Reply with:**\n' +
+      '―――――――――――――――――――\n' +
+      '*Hours:* [Total, e.g. 7h 30m]\n' +
+      '*Meetings:* [count] | [total time] | [names + durations]\n' +
+      '  _(or "0 meetings" if none)_\n' +
+      '*Tomorrow:* [Task 1 + CU link] | [Task 2 + CU link]\n' +
+      '*Blockers/Issues:* [what > owner > deadline] _(if any)_\n' +
+      '―――――――――――――――――――',
     cardsV2: null
   };
 }
@@ -490,8 +494,18 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
       });
     }
 
+    // Per-task outcomes (submitted via completion cards — hours, outcome, deliverable)
+    if (member.taskOutcomes && member.taskOutcomes.length > 0) {
+      prompt += 'Completed Task Outcomes (from card submissions):\n';
+      member.taskOutcomes.forEach(function(o) {
+        prompt += '  * "' + o.task_name + '": ' + o.outcome;
+        if (o.deliverable_link) prompt += ' | Deliverable: ' + o.deliverable_link;
+        prompt += '\n';
+      });
+    }
+
     if (member.eodReport) {
-      prompt += 'EOD Summary: "' + member.eodReport.substring(0, 200) + '"\n';
+      prompt += 'EOD Text Report (hours/meetings/tomorrow): "' + member.eodReport.substring(0, 200) + '"\n';
     }
 
     // Follow-through check
@@ -552,20 +566,39 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
       prompt += '\n';
     }
 
+    // Anti-gaming signals
+    if (member.gamingSignals && member.gamingSignals.flags && member.gamingSignals.flags.length > 0) {
+      prompt += '  ⚠️ Reporting Integrity Flags: ' + member.gamingSignals.flags.join(', ') + '\n';
+      if (member.gamingSignals.similarityScore > 0.5) {
+        prompt += '    Similarity to recent report: ' + Math.round(member.gamingSignals.similarityScore * 100) + '%';
+        if (member.gamingSignals.mostSimilarDate) prompt += ' (vs ' + member.gamingSignals.mostSimilarDate + ')';
+        prompt += '\n';
+      }
+      if (member.gamingSignals.vaguePhrasesFound && member.gamingSignals.vaguePhrasesFound.length > 0) {
+        prompt += '    Vague phrases: "' + member.gamingSignals.vaguePhrasesFound.join('", "') + '"\n';
+      }
+      if (member.gamingSignals.hoursTaskRatio) {
+        prompt += '    Hours/Task ratio: ' + member.gamingSignals.hoursTaskRatio + '\n';
+      }
+    }
+
     prompt += '\n';
   });
 
   // Instructions
   prompt += '## Instructions\n\n';
+  prompt += 'NOTE: Task outcomes and deliverables are now captured per-task via completion cards (shown as "Completed Task Outcomes"). The EOD text report only contains hours, meetings, tomorrow\'s plan, and blockers. Evaluate outcomes quality from the card data, not the text report.\n\n';
   prompt += 'For each team member, provide:\n';
   prompt += '1. **Rating**: Excellent / Good / Needs Attention / Concern\n';
   prompt += '2. **Hours Analysis**: Compare reported hours to (a) their own 7-day average, (b) their department average, (c) expected hours. Flag significant deviations.\n';
   prompt += '3. **Follow-Through**: Did they work on what they said they would yesterday? Flag mismatches.\n';
   prompt += '4. **Productivity Check**: Today\'s output vs their own 7-day average AND their department\'s average completion rate. Is this an up or down day?\n';
-  prompt += '5. **Trend Direction**: Based on 4-week data — is this person trending up, down, or stable?\n';
-  prompt += '6. **Peer Comparison**: How does this person compare to others in the same department? Are they an outlier (high or low)?\n';
-  prompt += '7. **Risk Flags**: Specific concerns with evidence from the data.\n';
-  prompt += '8. **Recommended Action**: What management should do (if anything).\n\n';
+  prompt += '5. **Outcome Quality**: Evaluate the specificity and depth of task outcomes from card submissions. Flag vague outcomes (e.g. "worked on it" vs specific deliverables). Note whether deliverable links were provided for completed tasks.\n';
+  prompt += '6. **Trend Direction**: Based on 4-week data — is this person trending up, down, or stable?\n';
+  prompt += '7. **Peer Comparison**: How does this person compare to others in the same department? Are they an outlier (high or low)?\n';
+  prompt += '8. **Risk Flags**: Specific concerns with evidence from the data. Flag if tasks were due but NONE were completed via cards.\n';
+  prompt += '9. **Recommended Action**: What management should do (if anything).\n';
+  prompt += '10. **Reporting Integrity**: If gaming flags are present, assess if the report is genuine. Rate: Genuine / Needs Review / Likely Gaming. If Likely Gaming, recommend management action.\n\n';
 
   prompt += '## Patterns to Flag\n';
   prompt += '- Hours significantly below their own 7-day average (not just the team standard)\n';
@@ -578,10 +611,23 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
   prompt += '- Reported 8h but only 1-2 small tasks completed (compare to their typical throughput)\n';
   prompt += '- Missing check-in or EOD — is this a one-off or pattern? Check 7-day attendance\n';
   prompt += '- Low hours + high output = possible underreporting (flag for praise, not concern)\n';
-  prompt += '- Improvement from previous evaluation flags (acknowledge progress)\n\n';
-
+  prompt += '- Improvement from previous evaluation flags (acknowledge progress)\n';
   prompt += '- Person consistently below their department average hours or completion rate\n';
-  prompt += '- Person significantly above department average (recognize top performers)\n\n';
+  prompt += '- Person significantly above department average (recognize top performers)\n';
+  prompt += '- Tasks due today but ZERO completed via cards — potential disengagement or blocker\n';
+  prompt += '- Task outcomes are vague or generic (e.g. "worked on it", "made progress") without specifics\n';
+  prompt += '- Completed tasks but no deliverable links provided (when task type warrants one)\n\n';
+
+  prompt += '## Anti-Gaming Patterns\n';
+  prompt += '- COPY_PASTE: >80% similar to a previous day\'s report — likely copy-pasted\n';
+  prompt += '- HIGH_SIMILARITY: 60-80% similar — may be recycling content\n';
+  prompt += '- VAGUE_LANGUAGE: Generic phrases without specifics ("did work", "various tasks")\n';
+  prompt += '- VERY_SHORT: Under 10 words — insufficient detail\n';
+  prompt += '- HOURS_INFLATION: High hours reported with very few tasks completed\n';
+  prompt += '- Multiple flags on the same person = compounding concern\n';
+  prompt += '- 3+ days of gaming flags = systemic pattern requiring escalation\n';
+  prompt += '- Context: Meetings-heavy roles may legitimately have shorter task-based reports\n\n';
+
   prompt += 'Be direct and specific. Name names. Reference the data — cite numbers.\n';
   prompt += 'Compare each person to BOTH their own historical baseline AND their department peers.\n';
   prompt += 'Use markdown formatting. Keep response concise but thorough.';

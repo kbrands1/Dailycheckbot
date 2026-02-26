@@ -508,6 +508,23 @@ function getAllOverdueTasks() {
 }
 
 /**
+ * Add time entry to a task
+ */
+function addTimeEntry(taskId, durationMs, userName) {
+  var structure = getWorkspaceStructure();
+  if (!structure) return null;
+
+  var now = Date.now();
+  return clickUpRequest('/team/' + structure.teamId + '/time_entries', 'POST', {
+    tid: taskId,
+    description: 'Logged via Daily Check-in Bot by ' + userName,
+    duration: durationMs,
+    start: now - durationMs,
+    stop: now
+  });
+}
+
+/**
  * Get task delay count (how many times it's been moved)
  */
 function getTaskDelayCount(taskId) {

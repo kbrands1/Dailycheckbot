@@ -586,6 +586,12 @@ function getReportRecipients(reportType) {
       return settings.weekly_summary_recipients || [settings.manager_email];
     case 'escalation':
       return settings.escalation_recipients || [settings.manager_email, settings.ops_leader_email];
+    case 'eod_forward':
+      var eodRecipients = settings.eod_forward_recipients;
+      if (eodRecipients) {
+        return Array.isArray(eodRecipients) ? eodRecipients : [eodRecipients];
+      }
+      return [settings.manager_email];
     case 'adoption_report':
       var adoptionRecipients = settings.adoption_report_recipients;
       if (adoptionRecipients) {
