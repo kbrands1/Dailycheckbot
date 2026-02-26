@@ -144,14 +144,18 @@ function dailySageHRSync() {
   var missingDMEmployees = [];
 
   working.forEach(function(emp) {
+    // Check if they're in the team_members sheet
+    var inSheet = config.team_members.find(function(tm) { return tm.email === emp.email; });
+
+    // Skip not_tracked users — they don't need bot setup
+    if (inSheet && inSheet.tracking_mode === 'not_tracked') return;
+
     // Check if they have a DM space (can the bot message them?)
     var dmSpace = getDMSpace(emp.email);
     if (!dmSpace) {
       missingDMEmployees.push(emp);
     }
 
-    // Check if they're in the team_members sheet
-    var inSheet = config.team_members.find(function(tm) { return tm.email === emp.email; });
     if (!inSheet) {
       newEmployees.push(emp);
     }
