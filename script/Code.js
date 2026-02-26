@@ -328,7 +328,52 @@ function handleEodResponse(email, name, text) {
 
   logEodReport(email, now, tasksCompleted, blockers, tomorrowPriority, text, hoursWorked);
 
-  var response = isFriday ? getFridayEodConfirmation() : getEodConfirmation();
+  // --- Build personalized EOD feedback ---
+  var feedback = {};
+
+  // Get yesterday's stated priority for follow-through check
+  try {
+    feedback.yesterdayPriority = getUserYesterdayPriority(email);
+  } catch (e) {
+    console.error('Failed to fetch yesterday priority for EOD feedback:', e.message);
+    feedback.yesterdayPriority = null;
+  }
+
+  // Get today's task stats
+  try {
+    if (config.clickup_config && config.clickup_config.enabled) {
+      var member = config.team_members.find(function(m) { return m.email === email; });
+      var taskSource = member ? member.task_source : 'clickup';
+
+      if (taskSource === 'clickup') {
+        var tasks = getTasksForUser(email, 'today');
+        if (tasks && tasks.length > 0) {
+          var completed = tasks.filter(function(t) { return t.status && t.status.toLowerCase().includes('close'); }).length;
+          var inProgress = tasks.filter(function(t) { return t.status && t.status.toLowerCase().includes('progress'); }).length;
+          var overdue = tasks.filter(function(t) { return t.isOverdue; }).length;
+          feedback.taskStats = {
+            total: tasks.length,
+            completed: completed,
+            inProgress: inProgress,
+            overdue: overdue,
+            notStarted: tasks.length - completed - inProgress
+          };
+        }
+      }
+    }
+  } catch (e) {
+    console.error('Failed to fetch task stats for EOD feedback:', e.message);
+  }
+
+  // Get expected hours
+  try {
+    feedback.expectedHours = getTodayExpectedHours(email);
+  } catch (e) {
+    feedback.expectedHours = 8;
+  }
+  feedback.hoursWorked = hoursWorked;
+
+  var response = isFriday ? getFridayEodConfirmation(feedback) : getEodConfirmation(feedback);
 
   if (hoursWorked === null) {
     response += '\n\n⏰ I didn\'t catch your hours worked today. Reply with just a number (e.g. "6.5") to log your hours.';

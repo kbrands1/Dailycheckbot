@@ -105,15 +105,74 @@ function getCheckInConfirmation(isLate) {
 /**
  * Get EOD confirmation message
  */
-function getEodConfirmation() {
-  return `✅ EOD report received. Great work today! See you tomorrow.`;
+function getEodConfirmation(feedback) {
+  var msg = '✅ EOD report received.\n\n';
+  msg += buildEodFeedback(feedback);
+  msg += '\nSee you tomorrow!';
+  return msg;
 }
 
 /**
  * Get Friday EOD confirmation
  */
-function getFridayEodConfirmation() {
-  return `✅ EOD report received. Great work this week! Enjoy your weekend! 🎉`;
+function getFridayEodConfirmation(feedback) {
+  var msg = '✅ EOD report received.\n\n';
+  msg += buildEodFeedback(feedback);
+  msg += '\nEnjoy your weekend! 🎉';
+  return msg;
+}
+
+/**
+ * Build personalized EOD feedback with task stats, follow-through, and hours
+ */
+function buildEodFeedback(feedback) {
+  if (!feedback) return '';
+  var lines = [];
+
+  // Task completion summary
+  if (feedback.taskStats) {
+    var ts = feedback.taskStats;
+    var completionPct = ts.total > 0 ? Math.round(ts.completed / ts.total * 100) : 0;
+    lines.push('📊 **Today\'s Task Summary:** ' + ts.completed + '/' + ts.total + ' tasks completed (' + completionPct + '%)');
+
+    if (ts.inProgress > 0) {
+      lines.push('   🔄 ' + ts.inProgress + ' still in progress');
+    }
+    if (ts.overdue > 0) {
+      lines.push('   ⚠️ ' + ts.overdue + ' overdue task' + (ts.overdue > 1 ? 's' : '') + ' — please prioritize these tomorrow');
+    }
+    if (ts.notStarted > 0 && ts.notStarted > ts.inProgress) {
+      lines.push('   📋 ' + ts.notStarted + ' task' + (ts.notStarted > 1 ? 's' : '') + ' not started');
+    }
+
+    // Low completion feedback
+    if (completionPct < 50 && ts.total >= 3) {
+      lines.push('\n💡 Less than half of your tasks were completed today. If something is blocking you, please flag it so we can help.');
+    } else if (completionPct >= 80) {
+      lines.push('\n🌟 Great productivity today!');
+    }
+  }
+
+  // Hours feedback
+  if (feedback.hoursWorked !== null && feedback.expectedHours) {
+    var hoursPct = Math.round(feedback.hoursWorked / feedback.expectedHours * 100);
+    if (feedback.hoursWorked < feedback.expectedHours * 0.7) {
+      lines.push('\n⏰ **Hours:** ' + feedback.hoursWorked + 'h reported (expected ' + feedback.expectedHours + 'h) — that\'s ' + hoursPct + '% of expected. Please ensure your hours are accurate.');
+    }
+  }
+
+  // Follow-through check
+  if (feedback.yesterdayPriority) {
+    lines.push('\n📌 **Follow-Through Check:**');
+    lines.push('Yesterday you planned: _"' + feedback.yesterdayPriority.substring(0, 200) + '"_');
+    if (feedback.taskStats && feedback.taskStats.completed === 0) {
+      lines.push('⚠️ No tasks were completed today — did you get to work on your planned priorities? If priorities shifted, that\'s OK but please note what changed.');
+    } else {
+      lines.push('✔️ Review: Did today\'s work align with this plan? Consistent follow-through builds momentum.');
+    }
+  }
+
+  return lines.length > 0 ? lines.join('\n') + '\n' : '';
 }
 
 /**

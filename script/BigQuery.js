@@ -1083,6 +1083,27 @@ function getYesterdayEodPriorities() {
 }
 
 /**
+ * Get yesterday's stated priority for a single user
+ * Returns: string or null
+ */
+function getUserYesterdayPriority(email) {
+  var projectId = getProjectId();
+  var query = 'SELECT tomorrow_priority '
+    + 'FROM `' + projectId + '.' + DATASET_ID + '.v_eod_reports` '
+    + 'WHERE user_email = "' + email + '" '
+    + 'AND eod_date = ( '
+    + '  SELECT MAX(eod_date) FROM `' + projectId + '.' + DATASET_ID + '.v_eod_reports` '
+    + '  WHERE eod_date < CURRENT_DATE() '
+    + '  AND eod_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 4 DAY) '
+    + '  AND user_email = "' + email + '" '
+    + ') '
+    + 'AND tomorrow_priority IS NOT NULL '
+    + 'AND tomorrow_priority != ""';
+  var results = runBigQueryQuery(query);
+  return results.length > 0 ? results[0].tomorrow_priority : null;
+}
+
+/**
  * Get the most recent AI evaluation for continuity
  * Returns: {evaluation_date, evaluation_text} or null
  */
