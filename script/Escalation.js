@@ -31,17 +31,49 @@ function escalateMissedCheckIn(memberEmail, memberName) {
 
 /**
  * Send escalation for missed EOD
+ * Employee gets full EOD request with task cards + enforcement
+ * Managers get plain text notification
  */
 function escalateMissedEod(memberEmail, memberName) {
   const config = getConfig();
   const recipients = getReportRecipients('escalation');
 
-  const allRecipients = [memberEmail, ...recipients.filter(r => r !== memberEmail)];
+  // 1. Send full EOD request with cards to the EMPLOYEE
+  try {
+    var tasks = [];
+    if (config.clickup_config && config.clickup_config.enabled) {
+      tasks = getTasksForUser(memberEmail, 'today');
+    }
+    var eodMessage = getEodRequestMessage({ email: memberEmail, name: memberName }, tasks);
 
-  const message = getMissedEodEscalation(memberEmail, memberName);
+    // Prefix with reminder
+    var reminderText = '⏰ **Reminder: You haven\'t submitted your EOD report yet.**\n\n' + eodMessage.text;
 
-  sendEscalationToRecipients(allRecipients, message);
+    if (eodMessage.cardsV2) {
+      sendDirectMessage(memberEmail, reminderText, eodMessage.cardsV2);
+      if (eodMessage.followUpText) {
+        sendDirectMessage(memberEmail, eodMessage.followUpText);
+      }
+    } else {
+      sendDirectMessage(memberEmail, reminderText);
+    }
 
+    // Set state so enforcement kicks in on their response
+    setUserState(memberEmail, 'AWAITING_EOD');
+    clearEodRetryCount(memberEmail);
+  } catch (err) {
+    console.error('Error sending EOD cards for escalation to ' + memberEmail + ':', err.message);
+    // Fallback to plain text if card send fails
+    sendDirectMessage(memberEmail, getMissedEodEscalation(memberEmail, memberName));
+  }
+
+  // 2. Send notification to MANAGERS only (exclude the employee)
+  var managerRecipients = recipients.filter(function(r) { return r !== memberEmail; });
+  if (managerRecipients.length > 0) {
+    sendEscalationToRecipients(managerRecipients, getMissedEodEscalation(memberEmail, memberName));
+  }
+
+  // 3. Log escalation
   insertIntoBigQuery('escalations', [{
     escalation_id: Utilities.getUuid(),
     escalation_type: 'MISSED_EOD',
