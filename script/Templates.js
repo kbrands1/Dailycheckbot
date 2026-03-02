@@ -50,6 +50,7 @@ function getMorningCheckInMessage(member, tasks, isMonday) {
 
   // No tasks or ClickUp disabled
   return `Good morning${userName ? ', ' + userName : ''}! 👋\n\n` +
+    `⚠️ Please make sure to create ClickUp tasks for everything you work on and track the time for it.\n\n` +
     `Please confirm you're online by replying "here" or sharing your #1 priority for today.`;
 }
 
@@ -67,8 +68,9 @@ function getCheckInFollowUpMessage() {
  * @param {Array} tasks - ClickUp/Odoo tasks
  * @param {number|null} lateMinutes - Minutes late this morning (null/0 = on time)
  * @param {object|null} workspaceStats - Workspace activity stats from Admin SDK
+ * @param {string|null} complianceWarning - ClickUp compliance warning message
  */
-function getEodRequestMessage(member, tasks, lateMinutes, workspaceStats) {
+function getEodRequestMessage(member, tasks, lateMinutes, workspaceStats, complianceWarning) {
   const config = getConfig();
   var lateNote = '';
   if (lateMinutes && lateMinutes > 0) {
@@ -80,7 +82,8 @@ function getEodRequestMessage(member, tasks, lateMinutes, workspaceStats) {
     activityBlock = formatWorkspaceStatsBlock(workspaceStats);
   }
 
-  var fullPrefix = lateNote + activityBlock;
+  var complianceTxt = complianceWarning ? complianceWarning + '\n\n' : '';
+  var fullPrefix = lateNote + complianceTxt + activityBlock;
 
   if (config.clickup_config.include_in_eod && tasks && tasks.length > 0) {
     return buildEodTaskMessage(tasks, fullPrefix);

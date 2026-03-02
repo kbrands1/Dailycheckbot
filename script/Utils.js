@@ -231,7 +231,17 @@ function testSendEodRequest() {
   } catch (wsErr) {
     console.error('testSendEodRequest: Workspace stats failed:', wsErr.message);
   }
-  const eod = getEodRequestMessage({ email }, tasks, getLateMinutesForUser(email), wStatsTest);
+
+  var complianceWarnTest = null;
+  try {
+    if (typeof handleClickUpCompliance === 'function') {
+      complianceWarnTest = handleClickUpCompliance(email, tasks.length);
+    }
+  } catch (cwErr) {
+    console.error('testSendEodRequest: Compliance warning failed:', cwErr.message);
+  }
+
+  const eod = getEodRequestMessage({ email }, tasks, getLateMinutesForUser(email), wStatsTest, complianceWarnTest);
   const result = sendDirectMessage(email, eod.text, eod.cardsV2);
   logPromptSent(email, 'EOD');
   setUserState(email, 'AWAITING_EOD');

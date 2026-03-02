@@ -44,6 +44,7 @@ function escalateMissedEod(memberEmail, memberName) {
     if (config.clickup_config && config.clickup_config.enabled) {
       tasks = getTasksForUser(memberEmail, 'today');
     }
+
     var wStatsEsc = null;
     try {
       if (typeof getUserWorkspaceStats === 'function') {
@@ -53,7 +54,16 @@ function escalateMissedEod(memberEmail, memberName) {
       console.error('escalateMissedEod: Workspace stats failed:', wsErr.message);
     }
 
-    var eodMessage = getEodRequestMessage({ email: memberEmail, name: memberName }, tasks, getLateMinutesForUser(memberEmail), wStatsEsc);
+    var complianceWarnEsc = null;
+    try {
+      if (typeof handleClickUpCompliance === 'function') {
+        complianceWarnEsc = handleClickUpCompliance(memberEmail, tasks.length);
+      }
+    } catch (cwErr) {
+      console.error('escalateMissedEod: Compliance warning failed:', cwErr.message);
+    }
+
+    var eodMessage = getEodRequestMessage({ email: memberEmail, name: memberName }, tasks, getLateMinutesForUser(memberEmail), wStatsEsc, complianceWarnEsc);
 
     // Prefix with reminder
     var reminderText = '⏰ **Reminder: You haven\'t submitted your EOD report yet.**\n\n' + eodMessage.text;

@@ -210,6 +210,7 @@ function buildMorningTaskMessage(tasks, userName) {
     message += `✅ No tasks due today in ClickUp.\n\n`;
   }
 
+  message += `⚠️ Please make sure to create ClickUp tasks for everything you work on and track the time for it.\n\n`;
   message += `Reply "here" to confirm you're online, or share your #1 priority.`;
 
   return message;
@@ -316,6 +317,7 @@ function buildWeeklyTaskPreview(tasks, userName) {
     message += '\n';
   }
 
+  message += `⚠️ Please make sure to create ClickUp tasks for everything you work on and track the time for it.\n\n`;
   message += `Reply "here" to confirm you're online!`;
 
   return message;

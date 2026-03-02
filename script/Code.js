@@ -54,6 +54,53 @@ function clearUserState(email) {
 }
 
 // ============================================
+// CLICKUP COMPLIANCE TRACKING
+// ============================================
+
+/**
+ * Track consecutive days with 0 tasks at EOD.
+ * Returns a warning string if streak > 0, otherwise null.
+ */
+function handleClickUpCompliance(email, taskCount) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var key = 'NO_TASKS_STREAK_' + email.replace(/[^a-zA-Z0-9]/g, '_');
+
+    // User has tasks -> reset streak and exit
+    if (taskCount > 0) {
+      props.deleteProperty(key);
+      return null;
+    }
+
+    // User has 0 tasks
+    var currentStreakStr = props.getProperty(key);
+    var streak = currentStreakStr ? parseInt(currentStreakStr, 10) : 0;
+    streak++;
+
+    props.setProperty(key, streak.toString());
+
+    var warning = '🚨 This is tracked - you did not follow directions to create ClickUp tasks. Please make sure to do it tomorrow.';
+
+    if (streak >= 3) {
+      warning += '\n\n⚠️ **WARNING: You have had no tasks for ' + streak + ' consecutive days. This is now being reported to Khalid.**';
+
+      // Trigger escalation (safe check if function exists)
+      if (typeof escalateClickUpCompliance === 'function') {
+        escalateClickUpCompliance(email, streak);
+      } else {
+        console.warn('escalateClickUpCompliance function missing, skipping escalation for ' + email);
+      }
+    }
+
+    return warning;
+
+  } catch (e) {
+    console.error('handleClickUpCompliance error for ' + email + ':', e.message);
+    return null;
+  }
+}
+
+// ============================================
 // LATE MINUTES HELPER
 // ============================================
 
@@ -280,11 +327,14 @@ function onMessage(event) {
           console.error('runeod: Workspace stats failed:', wsErr.message);
         }
 
+        var complianceWarning = handleClickUpCompliance(sender.email, eodTasks.length);
+
         var eodMessage = getEodRequestMessage(
           { email: sender.email, name: sender.displayName },
           eodTasks,
           lateMin,
-          workspaceStats
+          workspaceStats,
+          complianceWarning
         );
 
         // Send via REST API so tasks/cards are included
@@ -956,7 +1006,8 @@ function _sendEodRequests() {
         console.error('Error fetching workspace stats for ' + member.email + ':', wsErr.message);
       }
 
-      var eodMessage = getEodRequestMessage(member, tasks, lateMinutes, workspaceStats);
+      var complianceWarning = handleClickUpCompliance(member.email, tasks.length);
+      var eodMessage = getEodRequestMessage(member, tasks, lateMinutes, workspaceStats, complianceWarning);
 
       if (eodMessage.cardsV2) {
         sendDirectMessage(member.email, eodMessage.text, eodMessage.cardsV2);
@@ -1683,7 +1734,8 @@ function dispatchPrompt(member, promptType, config, todayCheckIns, todayEods) {
         console.error('Error fetching workspace stats for ' + member.email + ':', wsErr.message);
       }
 
-      var eodMessage = getEodRequestMessage(member, eodTasks, lateMin, wStats);
+      var complianceWarn = handleClickUpCompliance(member.email, eodTasks.length);
+      var eodMessage = getEodRequestMessage(member, eodTasks, lateMin, wStats, complianceWarn);
       if (eodMessage.cardsV2) {
         sendDirectMessage(member.email, eodMessage.text, eodMessage.cardsV2);
         if (eodMessage.followUpText) sendDirectMessage(member.email, eodMessage.followUpText);
