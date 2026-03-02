@@ -44,7 +44,7 @@ function escalateMissedEod(memberEmail, memberName) {
     if (config.clickup_config && config.clickup_config.enabled) {
       tasks = getTasksForUser(memberEmail, 'today');
     }
-    var eodMessage = getEodRequestMessage({ email: memberEmail, name: memberName }, tasks);
+    var eodMessage = getEodRequestMessage({ email: memberEmail, name: memberName }, tasks, getLateMinutesForUser(memberEmail));
 
     // Prefix with reminder
     var reminderText = '⏰ **Reminder: You haven\'t submitted your EOD report yet.**\n\n' + eodMessage.text;

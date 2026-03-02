@@ -54,6 +54,43 @@ function clearUserState(email) {
 }
 
 // ============================================
+// LATE MINUTES HELPER
+// ============================================
+
+/**
+ * Get how many minutes late a user checked in today.
+ * @param {string} email - User email
+ * @param {Array|null} checkInsCache - Pre-fetched today check-ins (optional)
+ * @returns {number} Minutes late (0 if on time or not checked in)
+ */
+function getLateMinutesForUser(email, checkInsCache) {
+  try {
+    var checkIns = checkInsCache || getTodayCheckIns();
+    var userCheckIn = checkIns.find(function (c) { return c.user_email === email; });
+    if (!userCheckIn) return 0;
+    var isLate = userCheckIn.is_late === true || userCheckIn.is_late === 'true';
+    if (!isLate) return 0;
+
+    // Calculate minutes late from checkin_timestamp vs schedule start
+    var schedule = getUserWorkSchedule(email);
+    var parts = schedule.blocks[0].start.split(':');
+    var startHour = parseInt(parts[0]);
+    var startMin = parseInt(parts[1]);
+    var graceMinutes = getLateThresholdMin();
+
+    var checkinTime = new Date(userCheckIn.checkin_timestamp);
+    var threshold = new Date(checkinTime);
+    threshold.setHours(startHour, startMin + graceMinutes, 0, 0);
+
+    var diffMs = checkinTime.getTime() - threshold.getTime();
+    return diffMs > 0 ? Math.ceil(diffMs / 60000) : 0;
+  } catch (e) {
+    console.error('getLateMinutesForUser error for ' + email + ':', e.message);
+    return 0;
+  }
+}
+
+// ============================================
 // EOD RETRY MANAGEMENT
 // ============================================
 
@@ -233,9 +270,11 @@ function onMessage(event) {
           console.error('runeod: ClickUp task fetch failed:', taskErr.message);
         }
 
+        var lateMin = getLateMinutesForUser(sender.email);
         var eodMessage = getEodRequestMessage(
           { email: sender.email, name: sender.displayName },
-          eodTasks
+          eodTasks,
+          lateMin
         );
 
         // Send via REST API so tasks/cards are included
@@ -877,6 +916,9 @@ function _sendEodRequests() {
   var config = getConfig();
   var splitSpecialActive = hasActiveSplitSpecialPeriod();
 
+  // Pre-fetch today's check-ins once for late-minutes lookup
+  var todayCheckIns = getTodayCheckIns();
+
   // Filter to tracked users on default schedule
   var defaultMembers = teamMembers.filter(function (m) {
     var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
@@ -894,7 +936,8 @@ function _sendEodRequests() {
         tasks = getTasksForUser(member.email, 'today');
       }
 
-      var eodMessage = getEodRequestMessage(member, tasks);
+      var lateMinutes = getLateMinutesForUser(member.email, todayCheckIns);
+      var eodMessage = getEodRequestMessage(member, tasks, lateMinutes);
 
       if (eodMessage.cardsV2) {
         sendDirectMessage(member.email, eodMessage.text, eodMessage.cardsV2);
@@ -1610,7 +1653,8 @@ function dispatchPrompt(member, promptType, config, todayCheckIns, todayEods) {
         break; // Already submitted EOD organically
       }
       var eodTasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
-      var eodMessage = getEodRequestMessage(member, eodTasks);
+      var lateMin = getLateMinutesForUser(member.email, todayCheckIns);
+      var eodMessage = getEodRequestMessage(member, eodTasks, lateMin);
       if (eodMessage.cardsV2) {
         sendDirectMessage(member.email, eodMessage.text, eodMessage.cardsV2);
         if (eodMessage.followUpText) sendDirectMessage(member.email, eodMessage.followUpText);

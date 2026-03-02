@@ -217,8 +217,11 @@ function buildMorningTaskMessage(tasks, userName) {
 
 /**
  * Build EOD task message with cards
+ * @param {Array} tasks - Tasks array
+ * @param {string} lateNote - Optional late check-in note to prepend
  */
-function buildEodTaskMessage(tasks) {
+function buildEodTaskMessage(tasks, lateNote) {
+  lateNote = lateNote || '';
   var eodFormatGuide = '\n📝 **After updating your task cards above, reply with:**\n' +
     '―――――――――――――――――――\n' +
     '*Hours:* [Total, e.g. 7h 30m]\n' +
@@ -232,7 +235,8 @@ function buildEodTaskMessage(tasks) {
 
   if (!tasks || tasks.length === 0) {
     return {
-      text: 'Time for your EOD report! 📝\n\n' +
+      text: lateNote +
+        'Time for your EOD report! 📝\n\n' +
         '🚨 **No ClickUp tasks were due today.** If you worked on tasks not in ClickUp, please describe them.\n\n' +
         '📝 **Reply with:**\n' +
         '―――――――――――――――――――\n' +
@@ -248,7 +252,7 @@ function buildEodTaskMessage(tasks) {
 
   const cards = tasks.slice(0, 10).map((task, i) => buildTaskCard(task, i)); // Limit to 10 cards
 
-  let text = `Time for your EOD report! 📝\n\n📋 **Tasks due today:** ${tasks.length}\nUpdate each task card below, then reply with your EOD summary.`;
+  let text = lateNote + `Time for your EOD report! 📝\n\n📋 **Tasks due today:** ${tasks.length}\nUpdate each task card below, then reply with your EOD summary.`;
 
   if (tasks.length > 10) {
     text += `\n\n(Showing first 10 of ${tasks.length} tasks)`;

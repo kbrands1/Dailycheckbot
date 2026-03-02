@@ -37,17 +37,17 @@
 function getMorningCheckInMessage(member, tasks, isMonday) {
   const config = getConfig();
   const userName = member.name || member.email.split('@')[0];
-  
+
   // If Monday and weekly preview enabled
   if (isMonday && config.clickup_config.show_weekly_monday) {
     return buildWeeklyTaskPreview(tasks, userName);
   }
-  
+
   // Regular day with tasks
   if (config.clickup_config.include_in_morning && tasks && tasks.length > 0) {
     return buildMorningTaskMessage(tasks, userName);
   }
-  
+
   // No tasks or ClickUp disabled
   return `Good morning${userName ? ', ' + userName : ''}! 👋\n\n` +
     `Please confirm you're online by replying "here" or sharing your #1 priority for today.`;
@@ -63,17 +63,25 @@ function getCheckInFollowUpMessage() {
 
 /**
  * Get EOD request message with tasks
+ * @param {object} member - Team member object
+ * @param {Array} tasks - ClickUp/Odoo tasks
+ * @param {number|null} lateMinutes - Minutes late this morning (null/0 = on time)
  */
-function getEodRequestMessage(member, tasks) {
+function getEodRequestMessage(member, tasks, lateMinutes) {
   const config = getConfig();
-  
-  if (config.clickup_config.include_in_eod && tasks && tasks.length > 0) {
-    return buildEodTaskMessage(tasks);
+  var lateNote = '';
+  if (lateMinutes && lateMinutes > 0) {
+    lateNote = '⏰ _You checked in *' + lateMinutes + ' minute' + (lateMinutes === 1 ? '' : 's') + ' late* this morning. Please ensure on-time check-ins going forward._\n\n';
   }
-  
+
+  if (config.clickup_config.include_in_eod && tasks && tasks.length > 0) {
+    return buildEodTaskMessage(tasks, lateNote);
+  }
+
   // No tasks or ClickUp disabled
   return {
-    text: 'Time for your EOD report! 📝\n\n' +
+    text: lateNote +
+      'Time for your EOD report! 📝\n\n' +
       '🚨 **No ClickUp tasks found.** If you worked on tasks not in ClickUp, please describe them.\n\n' +
       '📝 **Reply with:**\n' +
       '―――――――――――――――――――\n' +
@@ -217,7 +225,7 @@ function getMissedEodEscalation(memberEmail, memberName) {
  */
 function buildWeeklyGamificationMessage(leaderboard, badges) {
   let message = `🏆 **Weekly Leaderboard**\n\n`;
-  
+
   // Attendance section
   message += `📊 **Attendance Champions:**\n`;
   if (leaderboard.attendance && leaderboard.attendance.length > 0) {
@@ -227,7 +235,7 @@ function buildWeeklyGamificationMessage(leaderboard, badges) {
     });
   }
   message += '\n';
-  
+
   // Task completion section
   if (leaderboard.taskCompletion && leaderboard.taskCompletion.length > 0) {
     message += `📋 **Task Completion:**\n`;
@@ -237,13 +245,13 @@ function buildWeeklyGamificationMessage(leaderboard, badges) {
     });
     message += '\n';
   }
-  
+
   // Zero overdue
   if (leaderboard.zeroOverdue && leaderboard.zeroOverdue.length > 0) {
     message += `⚡ **Zero Overdue:**\n`;
     message += leaderboard.zeroOverdue.map(p => p.name).join(', ') + '\n\n';
   }
-  
+
   // Badges earned
   if (badges && badges.length > 0) {
     message += `🏅 **Badges Earned This Week:**\n`;
@@ -251,7 +259,7 @@ function buildWeeklyGamificationMessage(leaderboard, badges) {
       message += `• ${b.name}: ${b.badge} ${b.badgeName}\n`;
     });
   }
-  
+
   return message;
 }
 
@@ -260,14 +268,14 @@ function buildWeeklyGamificationMessage(leaderboard, badges) {
  */
 function buildWeeklySummaryMessage(stats) {
   const weekStart = Utilities.formatDate(
-    new Date(Date.now() - 4 * 24 * 60 * 60 * 1000), 
-    'America/Chicago', 
+    new Date(Date.now() - 4 * 24 * 60 * 60 * 1000),
+    'America/Chicago',
     'MMM d'
   );
   const weekEnd = Utilities.formatDate(new Date(), 'America/Chicago', 'MMM d');
-  
+
   let message = `📊 **Weekly Report - ${weekStart} to ${weekEnd}**\n\n`;
-  
+
   // Attendance
   message += `──────────────────────────────\n`;
   message += `👥 ATTENDANCE\n`;
@@ -276,7 +284,7 @@ function buildWeeklySummaryMessage(stats) {
   message += `• On-time rate: ${stats.onTimeRate}%\n`;
   message += `• EOD submission rate: ${stats.eodRate}%\n`;
   message += `• Average late arrivals: ${stats.avgLateMinutes} min\n\n`;
-  
+
   if (stats.perfectAttendance && stats.perfectAttendance.length > 0) {
     message += `🌟 Perfect attendance: ${stats.perfectAttendance.join(', ')}\n\n`;
   }
@@ -295,7 +303,7 @@ function buildWeeklySummaryMessage(stats) {
       message += `**Per-Person Hours:**\n`;
       message += `| Name | Avg/Day | Total | Expected | Delta |\n`;
       message += `|------|---------|-------|----------|-------|\n`;
-      hd.perPerson.forEach(function(p) {
+      hd.perPerson.forEach(function (p) {
         var deltaStr = p.delta >= 0 ? '+' + p.delta : '' + p.delta;
         message += `| ${p.name} | ${p.avgDaily}h | ${p.totalHours}h | ${p.expectedTotal}h | ${deltaStr}h |\n`;
       });
@@ -305,7 +313,7 @@ function buildWeeklySummaryMessage(stats) {
     // 4-week trends
     if (hd.trends && hd.trends.length > 0) {
       message += `**Week-over-Week Trends (last ${hd.trends.length} weeks):**\n`;
-      hd.trends.forEach(function(t) {
+      hd.trends.forEach(function (t) {
         var changeStr = t.change !== null ? ' ' + t.direction + ' ' + Math.abs(t.change) + 'h' : '';
         message += `• Week of ${t.weekStart}: avg ${t.avgDaily}h/day (total ${t.totalHours}h)${changeStr}\n`;
       });
@@ -315,7 +323,7 @@ function buildWeeklySummaryMessage(stats) {
     // Outliers
     if (hd.outliers && hd.outliers.length > 0) {
       message += `**⚠️ Hours Outliers:**\n`;
-      hd.outliers.forEach(function(o) {
+      hd.outliers.forEach(function (o) {
         var flagEmoji = o.flag === 'LOW' ? '🔻' : '🔺';
         message += `• ${flagEmoji} ${o.name}: ${o.totalHours}h / ${o.expectedTotal}h expected (${o.ratio}%)\n`;
       });
@@ -334,7 +342,7 @@ function buildWeeklySummaryMessage(stats) {
     message += `• Completed late: ${stats.taskStats.completedLate} (${stats.taskStats.lateRate}%)\n`;
     message += `• Delayed: ${stats.taskStats.delayed} (${stats.taskStats.delayedRate}%)\n`;
     message += `• Still overdue: ${stats.taskStats.stillOverdue}\n\n`;
-    
+
     // Overdue breakdown by person
     if (stats.taskStats.overdueByPerson && stats.taskStats.overdueByPerson.length > 0) {
       message += `**Overdue Breakdown:**\n`;
@@ -345,7 +353,7 @@ function buildWeeklySummaryMessage(stats) {
       });
       message += '\n';
     }
-    
+
     // Chronic overdue
     if (stats.taskStats.chronicOverdue && stats.taskStats.chronicOverdue.length > 0) {
       message += `**Chronic Overdue (3+ days):**\n`;
@@ -354,7 +362,7 @@ function buildWeeklySummaryMessage(stats) {
       });
       message += '\n';
     }
-    
+
     // Most delayed tasks
     if (stats.taskStats.repeatDelays && stats.taskStats.repeatDelays.length > 0) {
       message += `**Most Delayed Tasks:**\n`;
@@ -363,7 +371,7 @@ function buildWeeklySummaryMessage(stats) {
       });
       message += '\n';
     }
-    
+
     // Delay reasons
     if (stats.taskStats.delayReasons && Object.keys(stats.taskStats.delayReasons).length > 0) {
       message += `**Delay Reasons:**\n`;
@@ -375,7 +383,7 @@ function buildWeeklySummaryMessage(stats) {
       message += '\n';
     }
   }
-  
+
   // Blockers
   if (stats.topBlockers && stats.topBlockers.length > 0) {
     message += `──────────────────────────────\n`;
@@ -386,7 +394,7 @@ function buildWeeklySummaryMessage(stats) {
     });
     message += '\n';
   }
-  
+
   return message;
 }
 
@@ -412,7 +420,7 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
 
   // --- Compute department benchmarks ---
   var deptStats = {};
-  teamData.forEach(function(m) {
+  teamData.forEach(function (m) {
     var dept = m.department || 'Unknown';
     if (!deptStats[dept]) {
       deptStats[dept] = { members: 0, totalAvgHours: 0, hoursCount: 0, totalCompleted: 0, totalDue: 0, taskCount: 0 };
@@ -439,7 +447,7 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
   var deptKeys = Object.keys(deptStats).sort();
   if (deptKeys.length > 1 || (deptKeys.length === 1 && deptKeys[0] !== 'Unknown')) {
     prompt += '## Department Benchmarks (7-day averages)\n';
-    deptKeys.forEach(function(dept) {
+    deptKeys.forEach(function (dept) {
       var ds = deptStats[dept];
       prompt += '- **' + dept + '** (' + ds.members + ' people): ';
       if (ds.avgHoursPerDay !== null) prompt += 'avg ' + ds.avgHoursPerDay + 'h/day';
@@ -451,7 +459,7 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
 
   prompt += '## Team Data\n\n';
 
-  teamData.forEach(function(member) {
+  teamData.forEach(function (member) {
     // Header with role context
     prompt += '### ' + member.name + ' (' + member.email + ')';
     if (member.department || member.position) {
@@ -485,7 +493,7 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
     // Task details (capped at 5)
     if (member.taskDetails && member.taskDetails.length > 0) {
       prompt += 'Task List:\n';
-      member.taskDetails.forEach(function(t) {
+      member.taskDetails.forEach(function (t) {
         prompt += '  * "' + t.name + '" [' + t.status + ']';
         if (t.isOverdue) prompt += ' (OVERDUE)';
         if (t.timeEstimateHrs) prompt += ' (est: ' + t.timeEstimateHrs + 'h)';
@@ -497,7 +505,7 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
     // Per-task outcomes (submitted via completion cards — hours, outcome, deliverable)
     if (member.taskOutcomes && member.taskOutcomes.length > 0) {
       prompt += 'Completed Task Outcomes (from card submissions):\n';
-      member.taskOutcomes.forEach(function(o) {
+      member.taskOutcomes.forEach(function (o) {
         prompt += '  * "' + o.task_name + '": ' + o.outcome;
         if (o.deliverable_link) prompt += ' | Deliverable: ' + o.deliverable_link;
         prompt += '\n';
@@ -551,7 +559,7 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
     // 4-week hours trend (compact one-liner)
     if (member.hoursTrend && member.hoursTrend.length > 0) {
       prompt += '  4-Week Trend: ';
-      prompt += member.hoursTrend.map(function(w) {
+      prompt += member.hoursTrend.map(function (w) {
         return 'Wk' + w.week_num + ': ' + w.avg_daily_hours + 'h/day';
       }).join(' | ');
       prompt += '\n';
@@ -560,7 +568,7 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
     // Chronic issues
     if (member.repeatDelayedTasks && member.repeatDelayedTasks.length > 0) {
       prompt += '  Chronic Delays: ';
-      prompt += member.repeatDelayedTasks.map(function(t) {
+      prompt += member.repeatDelayedTasks.map(function (t) {
         return '"' + t.task_name + '" delayed ' + t.times_delayed + 'x';
       }).join(', ');
       prompt += '\n';
@@ -644,14 +652,14 @@ function buildStandupDigest(checkIns, teamMembers) {
   var message = '📋 *Team Standup - ' + today + '*\n\n';
 
   var nameMap = {};
-  teamMembers.forEach(function(m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
+  teamMembers.forEach(function (m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
 
   if (checkIns.length === 0) {
     message += 'No check-ins received yet.';
     return message;
   }
 
-  checkIns.forEach(function(ci) {
+  checkIns.forEach(function (ci) {
     var name = nameMap[ci.user_email] || ci.user_email;
     var response = ci.response_text || 'here';
     if (response.toLowerCase().trim() === 'here' || response.toLowerCase().trim() === 'present') {
@@ -663,16 +671,16 @@ function buildStandupDigest(checkIns, teamMembers) {
 
   var config = getConfig();
   var checkedInEmails = {};
-  checkIns.forEach(function(c) { checkedInEmails[c.user_email] = true; });
+  checkIns.forEach(function (c) { checkedInEmails[c.user_email] = true; });
   // Exclude not-tracked users from "missing" list
-  var missing = teamMembers.filter(function(m) {
+  var missing = teamMembers.filter(function (m) {
     if (checkedInEmails[m.email]) return false;
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
     return true;
   });
   if (missing.length > 0) {
-    message += '\n⏳ *Not yet checked in:* ' + missing.map(function(m) { return nameMap[m.email]; }).join(', ');
+    message += '\n⏳ *Not yet checked in:* ' + missing.map(function (m) { return nameMap[m.email]; }).join(', ');
   }
 
   return message;
@@ -686,14 +694,14 @@ function buildEodDigest(eods, teamMembers) {
   var message = '📝 *Team EOD Summary - ' + today + '*\n\n';
 
   var nameMap = {};
-  teamMembers.forEach(function(m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
+  teamMembers.forEach(function (m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
 
   if (eods.length === 0) {
     message += 'No EOD reports received yet.';
     return message;
   }
 
-  eods.forEach(function(eod) {
+  eods.forEach(function (eod) {
     var name = nameMap[eod.user_email] || eod.user_email;
     var summary = eod.tasks_completed || eod.raw_response || '(no details)';
     if (summary.length > 200) summary = summary.substring(0, 197) + '...';

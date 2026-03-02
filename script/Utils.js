@@ -223,7 +223,7 @@ function testSendEodRequest() {
   const config = getConfig();
   const email = config.settings.manager_email;
   const tasks = getTasksForUser(email, 'today');
-  const eod = getEodRequestMessage({ email }, tasks);
+  const eod = getEodRequestMessage({ email }, tasks, getLateMinutesForUser(email));
   const result = sendDirectMessage(email, eod.text, eod.cardsV2);
   logPromptSent(email, 'EOD');
   setUserState(email, 'AWAITING_EOD');
