@@ -11,12 +11,12 @@ const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions';
 function callOpenAI(prompt, maxTokens = 2000) {
   const config = getConfig();
   const apiKey = config.openai_api_key;
-  
+
   if (!apiKey) {
     console.error('OpenAI API key not configured');
     return null;
   }
-  
+
   const payload = {
     model: getOpenAIModel(),
     messages: [
@@ -26,7 +26,7 @@ function callOpenAI(prompt, maxTokens = 2000) {
     max_tokens: maxTokens,
     temperature: 0.7
   };
-  
+
   const options = {
     method: 'post',
     headers: {
@@ -36,16 +36,16 @@ function callOpenAI(prompt, maxTokens = 2000) {
     payload: JSON.stringify(payload),
     muteHttpExceptions: true
   };
-  
+
   try {
     const response = UrlFetchApp.fetch(OPENAI_API_URL, options);
     const code = response.getResponseCode();
-    
+
     if (code !== 200) {
       console.error(`OpenAI API error: ${code} - ${response.getContentText()}`);
       return null;
     }
-    
+
     const result = JSON.parse(response.getContentText());
     return result.choices[0].message.content;
   } catch (error) {
@@ -61,7 +61,7 @@ function callOpenAI(prompt, maxTokens = 2000) {
 function estimateTaskHours(tasks, eodText, reportedHours) {
   if (!tasks || tasks.length === 0) return null;
 
-  var taskList = tasks.map(function(t) {
+  var taskList = tasks.map(function (t) {
     var line = '- "' + t.name + '" [' + (t.status || 'unknown') + ']';
     if (t.description) line += ' — ' + (t.description || '').substring(0, 80);
     return line;
@@ -125,12 +125,12 @@ function parseEodWithAI(rawText) {
  */
 function generateDailyAiEvaluation() {
   console.log('Generating daily AI evaluation...');
-  
+
   const allMembers = getCachedWorkingEmployees();
   const config = getConfig();
   // Filter to tracked users only for AI evaluation
-  const teamMembers = allMembers.filter(function(m) {
-    var fullMember = config.team_members.find(function(tm) { return tm.email === m.email; });
+  const teamMembers = allMembers.filter(function (m) {
+    var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     return !fullMember || (fullMember.tracking_mode || 'tracked') === 'tracked';
   });
   const todayCheckIns = getTodayCheckIns();
@@ -148,19 +148,19 @@ function generateDailyAiEvaluation() {
 
   try {
     var rawAttendance = getTeamWeeklyAttendanceStats();
-    rawAttendance.forEach(function(r) { teamAttendance[r.user_email] = r; });
+    rawAttendance.forEach(function (r) { teamAttendance[r.user_email] = r; });
   } catch (e) { console.error('Historical attendance fetch failed:', e.message); }
 
   try {
     if (config.clickup_config.enabled) {
       var rawTaskStats = getTeamTaskStats();
-      rawTaskStats.forEach(function(r) { teamTaskHistory[r.user_email] = r; });
+      rawTaskStats.forEach(function (r) { teamTaskHistory[r.user_email] = r; });
     }
   } catch (e) { console.error('Historical task stats fetch failed:', e.message); }
 
   try {
     var rawHours = getWeeklyHoursData();
-    rawHours.forEach(function(r) {
+    rawHours.forEach(function (r) {
       if (!teamHoursWeekly[r.user_email]) {
         teamHoursWeekly[r.user_email] = { totalHours: 0, daysReported: 0, dailyHours: [] };
       }
@@ -177,7 +177,7 @@ function generateDailyAiEvaluation() {
 
   try {
     var rawTrends = getHoursTrends();
-    rawTrends.forEach(function(r) {
+    rawTrends.forEach(function (r) {
       if (!teamHoursTrends[r.user_email]) teamHoursTrends[r.user_email] = [];
       teamHoursTrends[r.user_email].push({
         week_num: r.week_num,
@@ -190,12 +190,12 @@ function generateDailyAiEvaluation() {
 
   try {
     var rawStreaks = getTeamStreaks();
-    rawStreaks.forEach(function(r) { teamStreaks[r.user_email] = parseInt(r.streak_length) || 0; });
+    rawStreaks.forEach(function (r) { teamStreaks[r.user_email] = parseInt(r.streak_length) || 0; });
   } catch (e) { console.error('Streaks fetch failed:', e.message); }
 
   try {
     var rawPriorities = getYesterdayEodPriorities();
-    rawPriorities.forEach(function(r) { yesterdayPriorities[r.user_email] = r.tomorrow_priority; });
+    rawPriorities.forEach(function (r) { yesterdayPriorities[r.user_email] = r.tomorrow_priority; });
   } catch (e) { console.error('Yesterday priorities fetch failed:', e.message); }
 
   try {
@@ -211,7 +211,7 @@ function generateDailyAiEvaluation() {
   // Fetch recent EOD responses for anti-gaming comparison
   var recentResponsesMap = {};
   try {
-    teamMembers.forEach(function(m) {
+    teamMembers.forEach(function (m) {
       var recent = getRecentEodRawResponses(m.email, 7);
       if (recent && recent.length > 0) {
         recentResponsesMap[m.email] = recent;
@@ -231,7 +231,7 @@ function generateDailyAiEvaluation() {
   const teamData = teamMembers.map(member => {
     const checkIn = todayCheckIns.find(c => c.user_email === member.email);
     const eod = todayEods.find(e => e.user_email === member.email);
-    var fullMember = config.team_members.find(function(tm) { return tm.email === member.email; });
+    var fullMember = config.team_members.find(function (tm) { return tm.email === member.email; });
 
     // Fetch tasks once for both taskStats and hours analysis
     var tasks = [];
@@ -267,14 +267,14 @@ function generateDailyAiEvaluation() {
     // ClickUp time estimates (if enabled)
     var clickupEstimateHrs = null;
     if (config.clickup_config.use_clickup_time_estimates && tasks && tasks.length > 0) {
-      var totalMs = tasks.reduce(function(sum, t) { return sum + (t.timeEstimateMs || 0); }, 0);
+      var totalMs = tasks.reduce(function (sum, t) { return sum + (t.timeEstimateMs || 0); }, 0);
       if (totalMs > 0) {
         clickupEstimateHrs = Math.round(totalMs / 3600000 * 10) / 10;
       }
     }
 
     // Task details for AI (capped at 5 for token efficiency)
-    var taskDetails = tasks ? tasks.slice(0, 5).map(function(t) {
+    var taskDetails = tasks ? tasks.slice(0, 5).map(function (t) {
       return {
         name: t.name,
         description: (t.description || '').substring(0, 100),
@@ -291,7 +291,7 @@ function generateDailyAiEvaluation() {
     } catch (e) { console.error('Task outcomes fetch failed for ' + member.email + ':', e.message); }
 
     // Repeat-delayed tasks for this user
-    var userRepeatDelayed = repeatDelayed.filter(function(t) { return t.user_email === member.email; });
+    var userRepeatDelayed = repeatDelayed.filter(function (t) { return t.user_email === member.email; });
 
     // Anti-gaming signals
     var gamingSignals = null;
@@ -302,6 +302,21 @@ function generateDailyAiEvaluation() {
         gamingSignals = computeGamingSignals(member.email, todayRaw, recentForUser, taskStats, eodHours);
       }
     } catch (e) { console.error('Gaming signals failed for ' + member.email + ':', e.message); }
+
+    // Extract exact attendance times
+    var actualStart = null;
+    if (checkIn && checkIn.checkin_timestamp) {
+      actualStart = Utilities.formatDate(new Date(checkIn.checkin_timestamp), 'America/Chicago', 'HH:mm');
+    }
+
+    var actualEnd = null;
+    if (eod && eod.submission_timestamp) {
+      actualEnd = Utilities.formatDate(new Date(eod.submission_timestamp), 'America/Chicago', 'HH:mm');
+    }
+
+    var schedule = getUserWorkSchedule(member.email);
+    var schedStart = schedule.blocks[0].start;
+    var schedEnd = schedule.blocks[schedule.blocks.length - 1].end;
 
     return {
       name: member.name || member.email.split('@')[0],
@@ -315,7 +330,11 @@ function generateDailyAiEvaluation() {
       // Today's data
       checkedIn: !!checkIn,
       isLate: checkIn ? checkIn.is_late : false,
+      actualStart: actualStart,
+      schedStart: schedStart,
       eodSubmitted: !!eod,
+      actualEnd: actualEnd,
+      schedEnd: schedEnd,
       eodReport: eod ? eod.tasks_completed : null,
       blockers: eod ? eod.blockers : null,
       taskStats: taskStats,
@@ -349,21 +368,21 @@ function generateDailyAiEvaluation() {
 
   const prompt = buildAiEvaluationPrompt(teamData, lastEvaluation);
   const evaluation = callOpenAI(prompt, 3000);
-  
+
   if (!evaluation) {
     console.error('Failed to generate AI evaluation');
     logSystemEvent('AI_EVALUATION', 'FAILED', { error: 'No response from OpenAI' });
     return;
   }
-  
+
   const today = Utilities.formatDate(new Date(), 'America/Chicago', 'EEEE, MMMM d');
   const message = `📊 **AI Daily Evaluation - ${today}**\n\n${evaluation}`;
-  
+
   const recipients = getReportRecipients('ai_evaluation');
   recipients.forEach(recipient => {
     sendDirectMessage(recipient, message);
   });
-  
+
   insertIntoBigQuery('ai_evaluations', [{
     evaluation_id: Utilities.getUuid(),
     evaluation_date: Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd'),
@@ -371,7 +390,7 @@ function generateDailyAiEvaluation() {
     team_size: teamData.length,
     created_at: new Date().toISOString()
   }]);
-  
+
   logSystemEvent('AI_EVALUATION', 'SUCCESS', { teamSize: teamData.length, recipients: recipients.length });
   console.log(`AI evaluation sent to ${recipients.length} recipients`);
 }
@@ -381,10 +400,10 @@ function generateDailyAiEvaluation() {
  */
 function generateWeeklySummary() {
   console.log('Generating weekly summary...');
-  
+
   const config = getConfig();
   const projectId = getProjectId();
-  
+
   // Get real weekly stats from BigQuery (BUG #9 fix - was hardcoded)
   var weeklyData = {};
   try {
@@ -444,7 +463,7 @@ function generateWeeklySummary() {
       });
     }
   }
-  
+
   // Assemble hours data for weekly report
   var hoursData = null;
   try {
@@ -463,7 +482,7 @@ function generateWeeklySummary() {
   recipients.forEach(recipient => {
     sendDirectMessage(recipient, message);
   });
-  
+
   logSystemEvent('WEEKLY_SUMMARY', 'SUCCESS', { recipients: recipients.length });
   console.log(`Weekly summary sent to ${recipients.length} recipients`);
 }
@@ -482,7 +501,7 @@ function assembleHoursData(weeklyHours, hoursTrends, teamMembers) {
   // Per-person weekly hours
   var personHours = {};
   if (weeklyHours && weeklyHours.length > 0) {
-    weeklyHours.forEach(function(row) {
+    weeklyHours.forEach(function (row) {
       var email = row.user_email;
       if (!personHours[email]) {
         personHours[email] = { totalHours: 0, daysReported: 0, dailyHours: [] };
@@ -504,7 +523,7 @@ function assembleHoursData(weeklyHours, hoursTrends, teamMembers) {
     var data = personHours[email];
     var avgDaily = data.daysReported > 0 ? Math.round(data.totalHours / data.daysReported * 10) / 10 : 0;
     var delta = Math.round((data.totalHours - expectedWeeklyTotal) * 10) / 10;
-    var member = teamMembers ? teamMembers.find(function(m) { return m.email === email; }) : null;
+    var member = teamMembers ? teamMembers.find(function (m) { return m.email === email; }) : null;
     var name = member ? (member.name || email.split('@')[0]) : email.split('@')[0];
 
     perPerson.push({
@@ -526,10 +545,10 @@ function assembleHoursData(weeklyHours, hoursTrends, teamMembers) {
   var reportingRate = totalMembers > 0 ? Math.round(membersReporting / totalMembers * 100) : 0;
 
   // Outliers: < 70% or > 120% of expected
-  var outliers = perPerson.filter(function(p) {
+  var outliers = perPerson.filter(function (p) {
     var ratio = p.totalHours / p.expectedTotal;
     return ratio < 0.7 || ratio > 1.2;
-  }).map(function(p) {
+  }).map(function (p) {
     var ratio = Math.round(p.totalHours / p.expectedTotal * 100);
     return {
       name: p.name,
@@ -543,7 +562,7 @@ function assembleHoursData(weeklyHours, hoursTrends, teamMembers) {
   // 4-week trends
   var weeklyTrends = {};
   if (hoursTrends && hoursTrends.length > 0) {
-    hoursTrends.forEach(function(row) {
+    hoursTrends.forEach(function (row) {
       var weekNum = row.week_num;
       if (!weeklyTrends[weekNum]) {
         weeklyTrends[weekNum] = {
