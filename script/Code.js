@@ -99,7 +99,7 @@ function validateEodSubmission(text) {
   var meetingKeywords = ['meeting', 'meetings', '0 meetings', 'no meetings',
     'standup', 'stand-up', 'sync', 'call', 'huddle', 'retro', 'sprint',
     'planning', 'review meeting', '1-on-1', '1:1', 'workshop'];
-  var hasMeetings = meetingKeywords.some(function(kw) {
+  var hasMeetings = meetingKeywords.some(function (kw) {
     return lowerText.indexOf(kw) !== -1;
   });
   if (!hasMeetings) missing.push('meetings');
@@ -108,7 +108,7 @@ function validateEodSubmission(text) {
   var tomorrowPriority = extractTomorrowPriority(text);
   var tomorrowKeywords = ['tomorrow', 'next', 'plan', 'priority', 'will do',
     'going to', 'focus on', 'continue', 'start', 'upcoming', 'next week'];
-  var hasTomorrow = tomorrowPriority !== null || tomorrowKeywords.some(function(kw) {
+  var hasTomorrow = tomorrowPriority !== null || tomorrowKeywords.some(function (kw) {
     return lowerText.indexOf(kw) !== -1;
   });
   if (!hasTomorrow) missing.push('tomorrow_priority');
@@ -294,7 +294,7 @@ function onMessage(event) {
       var noTasksCompleted = false;
       try {
         var todayActions = getTodayTaskActions(sender.email);
-        var completedCount = todayActions.filter(function(a) { return a.action_type === 'COMPLETE'; }).length;
+        var completedCount = todayActions.filter(function (a) { return a.action_type === 'COMPLETE'; }).length;
         var anyActions = todayActions.length > 0;
         // Flag if user had tasks shown but completed none, unless they explain why
         if (completedCount === 0 && !lowerText.match(/no tasks|didn.t complete|couldn.t|was in meetings|sick|pto|out of office|off today/)) {
@@ -498,15 +498,15 @@ function handleEodResponse(email, name, text) {
   var tasks = [];
   try {
     if (config.clickup_config && config.clickup_config.enabled) {
-      var member = config.team_members.find(function(m) { return m.email === email; });
+      var member = config.team_members.find(function (m) { return m.email === email; });
       var taskSource = member ? member.task_source : 'clickup';
 
       if (taskSource === 'clickup' || taskSource === 'both') {
         tasks = getTasksForUser(email, 'today') || [];
         if (tasks.length > 0) {
-          var completed = tasks.filter(function(t) { return t.status && t.status.toLowerCase().includes('close'); }).length;
-          var inProgress = tasks.filter(function(t) { return t.status && t.status.toLowerCase().includes('progress'); }).length;
-          var overdue = tasks.filter(function(t) { return t.isOverdue; }).length;
+          var completed = tasks.filter(function (t) { return t.status && t.status.toLowerCase().includes('close'); }).length;
+          var inProgress = tasks.filter(function (t) { return t.status && t.status.toLowerCase().includes('progress'); }).length;
+          var overdue = tasks.filter(function (t) { return t.isOverdue; }).length;
           feedback.taskStats = {
             total: tasks.length,
             completed: completed,
@@ -560,10 +560,10 @@ function handleEodResponse(email, name, text) {
     // Include task outcomes from card submissions
     try {
       var taskOutcomes = getTodayTaskActions(email);
-      var completedTasks = taskOutcomes.filter(function(a) { return a.action_type === 'COMPLETE'; });
+      var completedTasks = taskOutcomes.filter(function (a) { return a.action_type === 'COMPLETE'; });
       if (completedTasks.length > 0) {
         forwardMsg += '\n\n📋 **Task Card Actions Today:** ' + completedTasks.length + ' completed';
-        completedTasks.forEach(function(t) {
+        completedTasks.forEach(function (t) {
           forwardMsg += '\n  • ' + t.task_name;
         });
       } else {
@@ -801,6 +801,19 @@ function _postMorningSummary() {
     if (checkedInEmails[m.email]) return false;
     var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
+
+    try {
+      var schedule = getUserWorkSchedule(m.email);
+      if (schedule && schedule.blocks && schedule.blocks.length > 0) {
+        var startMin = timeToMinutes(schedule.blocks[0].start);
+        var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+        // If their shift hasn't started (plus 30m grace), they aren't "missing" yet
+        if (nowMin < startMin + 30) return false;
+      }
+    } catch (e) {
+      // Ignore err
+    }
+
     return true;
   });
 
@@ -965,6 +978,19 @@ function _postEodSummary() {
     if (submittedEmails[m.email]) return false;
     var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
+
+    try {
+      var schedule = getUserWorkSchedule(m.email);
+      if (schedule && schedule.blocks && schedule.blocks.length > 0) {
+        var endMin = timeToMinutes(schedule.blocks[schedule.blocks.length - 1].end);
+        var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+        // If their shift hasn't ended, they aren't "missing" EOD yet
+        if (nowMin < endMin) return false;
+      }
+    } catch (e) {
+      // Ignore err
+    }
+
     return true;
   });
   var notTracked = getNotTrackedTeamMembers();
@@ -1044,13 +1070,13 @@ function _sendCompiledEodBatch(todayEods, teamMembers) {
 
   var today = Utilities.formatDate(new Date(), 'America/Chicago', 'EEEE, MMMM d');
   var nameMap = {};
-  teamMembers.forEach(function(m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
+  teamMembers.forEach(function (m) { nameMap[m.email] = m.name || m.email.split('@')[0]; });
 
   var batch = '📋 **Compiled EOD Reports — ' + today + '**\n';
   batch += todayEods.length + ' reports received\n';
   batch += '═══════════════════════════\n\n';
 
-  todayEods.forEach(function(eod) {
+  todayEods.forEach(function (eod) {
     var name = nameMap[eod.user_email] || eod.user_email.split('@')[0];
     var hours = eod.hours_worked !== null && eod.hours_worked !== undefined ? eod.hours_worked + 'h' : 'not reported';
 
@@ -1097,7 +1123,7 @@ function _getLatestShiftEndMinutes() {
 
   for (var i = 0; i < workingEmployees.length; i++) {
     var email = workingEmployees[i].email;
-    var fullMember = config.team_members.find(function(tm) { return tm.email === email; });
+    var fullMember = config.team_members.find(function (tm) { return tm.email === email; });
     if (fullMember && (fullMember.tracking_mode || 'tracked') !== 'tracked') continue;
 
     try {
@@ -1131,7 +1157,7 @@ function _checkAndSendCompiledBatch() {
 
   var now = new Date();
   var nowMinutes = parseInt(Utilities.formatDate(now, 'America/Chicago', 'HH')) * 60 +
-                   parseInt(Utilities.formatDate(now, 'America/Chicago', 'mm'));
+    parseInt(Utilities.formatDate(now, 'America/Chicago', 'mm'));
 
   var latestEnd = _getLatestShiftEndMinutes();
   var BUFFER = 15; // 15 minutes after last shift ends
@@ -1471,24 +1497,49 @@ function triggerScheduleDispatcher() {
 
   if (dispatchUsers.length === 0) return;
 
-  var promptTypes = ['CHECKIN', 'CHECKIN_FOLLOWUP', 'EOD', 'EOD_FOLLOWUP'];
+  var checkinTypes = ['CHECKIN', 'CHECKIN_FOLLOWUP', 'ESCALATION_CHECKIN'];
+  var eodTypes = ['EOD', 'EOD_FOLLOWUP', 'ESCALATION_EOD'];
   var cache = CacheService.getScriptCache();
   var todayStr = Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd');
 
+  var todayCheckIns = null;
+  var todayEods = null;
+
   for (var i = 0; i < dispatchUsers.length; i++) {
     var member = dispatchUsers[i];
-    for (var j = 0; j < promptTypes.length; j++) {
-      var promptType = promptTypes[j];
-      if (isTimeForPrompt(member.email, promptType)) {
-        // Dedup: don't send same prompt type twice in one day
-        var dedupKey = 'DISPATCH_' + promptType + '_' + member.email + '_' + todayStr;
-        if (cache.get(dedupKey)) continue;
 
-        try {
-          dispatchPrompt(member, promptType, config);
-          cache.put(dedupKey, 'sent', 21600);
-        } catch (err) {
-          console.error('Dispatcher error for ' + member.email + ' ' + promptType + ':', err.message);
+    // Evaluate CHECKIN series sequentially per user
+    for (var j = 0; j < checkinTypes.length; j++) {
+      var promptType = checkinTypes[j];
+      if (isTimeForPrompt(member.email, promptType)) {
+        var dedupKey = 'DISPATCH_' + promptType + '_' + member.email + '_' + todayStr;
+        if (!cache.get(dedupKey)) {
+          if (!todayCheckIns) todayCheckIns = getTodayCheckIns();
+          try {
+            dispatchPrompt(member, promptType, config, todayCheckIns, todayEods);
+            cache.put(dedupKey, 'sent', 21600); // 6 hour TTL
+          } catch (err) {
+            console.error('Dispatcher error for ' + member.email + ' ' + promptType + ':', err.message);
+          }
+          break; // Stop evaluating check-in series for this user (max 1 per run)
+        }
+      }
+    }
+
+    // Evaluate EOD series sequentially per user
+    for (var k = 0; k < eodTypes.length; k++) {
+      var eodType = eodTypes[k];
+      if (isTimeForPrompt(member.email, eodType)) {
+        var dedupKey = 'DISPATCH_' + eodType + '_' + member.email + '_' + todayStr;
+        if (!cache.get(dedupKey)) {
+          if (!todayEods) todayEods = getTodayEodReports();
+          try {
+            dispatchPrompt(member, eodType, config, todayCheckIns, todayEods);
+            cache.put(dedupKey, 'sent', 21600); // 6 hour TTL
+          } catch (err) {
+            console.error('Dispatcher error for ' + member.email + ' ' + eodType + ':', err.message);
+          }
+          break; // Stop evaluating EOD series for this user (max 1 per run)
         }
       }
     }
@@ -1510,13 +1561,17 @@ function isTimeForPrompt(email, promptType) {
 
   switch (promptType) {
     case 'CHECKIN':
-      return nowMinutes >= block1Start && nowMinutes <= block1Start + WINDOW;
+      return nowMinutes >= block1Start && nowMinutes <= block1Start + 180;
     case 'CHECKIN_FOLLOWUP':
-      return nowMinutes >= block1Start + 20 && nowMinutes <= block1Start + 35;
+      return nowMinutes >= block1Start + 20 && nowMinutes <= block1Start + 180;
+    case 'ESCALATION_CHECKIN':
+      return nowMinutes >= block1Start + 45 && nowMinutes <= block1Start + 180;
     case 'EOD':
-      return nowMinutes >= lastBlockEnd - 30 && nowMinutes <= lastBlockEnd - 15;
+      return nowMinutes >= lastBlockEnd - 45 && nowMinutes <= lastBlockEnd + 120;
     case 'EOD_FOLLOWUP':
-      return nowMinutes >= lastBlockEnd - 10 && nowMinutes <= lastBlockEnd + 5;
+      return nowMinutes >= lastBlockEnd - 10 && nowMinutes <= lastBlockEnd + 120;
+    case 'ESCALATION_EOD':
+      return nowMinutes >= lastBlockEnd + 15 && nowMinutes <= lastBlockEnd + 120;
     default:
       return false;
   }
@@ -1525,9 +1580,12 @@ function isTimeForPrompt(email, promptType) {
 /**
  * Send the appropriate prompt to a user based on type.
  */
-function dispatchPrompt(member, promptType, config) {
+function dispatchPrompt(member, promptType, config, todayCheckIns, todayEods) {
   switch (promptType) {
     case 'CHECKIN':
+      if (todayCheckIns && todayCheckIns.some(function (c) { return c.user_email === member.email; })) {
+        break; // Already checked in organically
+      }
       var tasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
       var msg = getMorningCheckInMessage(member, tasks, new Date().getDay() === 1);
       sendDirectMessage(member.email, msg);
@@ -1535,14 +1593,22 @@ function dispatchPrompt(member, promptType, config) {
       setUserState(member.email, 'AWAITING_CHECKIN');
       break;
     case 'CHECKIN_FOLLOWUP':
-      var todayCheckIns = getTodayCheckIns();
-      var alreadyCheckedIn = todayCheckIns.some(function (c) { return c.user_email === member.email; });
-      if (!alreadyCheckedIn) {
+      if (!todayCheckIns || !todayCheckIns.some(function (c) { return c.user_email === member.email; })) {
         sendDirectMessage(member.email, getCheckInFollowUpMessage());
         logPromptSent(member.email, 'CHECKIN_FOLLOWUP');
       }
       break;
+    case 'ESCALATION_CHECKIN':
+      if (!todayCheckIns || !todayCheckIns.some(function (c) { return c.user_email === member.email; })) {
+        logMissedCheckIn(member.email, new Date(), 'CHECKIN');
+        escalateMissedCheckIn(member.email, member.name || member.email.split('@')[0]);
+        logPromptSent(member.email, 'ESCALATION_CHECKIN');
+      }
+      break;
     case 'EOD':
+      if (todayEods && todayEods.some(function (e) { return e.user_email === member.email; })) {
+        break; // Already submitted EOD organically
+      }
       var eodTasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
       var eodMessage = getEodRequestMessage(member, eodTasks);
       if (eodMessage.cardsV2) {
@@ -1556,11 +1622,16 @@ function dispatchPrompt(member, promptType, config) {
       clearEodRetryCount(member.email);
       break;
     case 'EOD_FOLLOWUP':
-      var todayEods = getTodayEodReports();
-      var alreadySubmitted = todayEods.some(function (e) { return e.user_email === member.email; });
-      if (!alreadySubmitted) {
+      if (!todayEods || !todayEods.some(function (e) { return e.user_email === member.email; })) {
         sendDirectMessage(member.email, getEodFollowUpMessage());
         logPromptSent(member.email, 'EOD_FOLLOWUP');
+      }
+      break;
+    case 'ESCALATION_EOD':
+      if (!todayEods || !todayEods.some(function (e) { return e.user_email === member.email; })) {
+        logMissedCheckIn(member.email, new Date(), 'EOD');
+        escalateMissedEod(member.email, member.name || member.email.split('@')[0]);
+        logPromptSent(member.email, 'ESCALATION_EOD');
       }
       break;
   }

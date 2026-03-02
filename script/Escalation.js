@@ -68,7 +68,7 @@ function escalateMissedEod(memberEmail, memberName) {
   }
 
   // 2. Send notification to MANAGERS only (exclude the employee)
-  var managerRecipients = recipients.filter(function(r) { return r !== memberEmail; });
+  var managerRecipients = recipients.filter(function (r) { return r !== memberEmail; });
   if (managerRecipients.length > 0) {
     sendEscalationToRecipients(managerRecipients, getMissedEodEscalation(memberEmail, memberName));
   }
@@ -139,6 +139,11 @@ function checkMorningEscalations() {
     if (checkedInEmails.has(m.email)) return false;
     var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
+
+    // Skip users handled by the dispatcher (custom schedules / special periods)
+    if (hasActiveSplitSpecialPeriod(new Date())) return false;
+    if (fullMember && fullMember.custom_start_time) return false;
+
     return true;
   });
 
@@ -179,6 +184,11 @@ function checkEodEscalations() {
     if (submittedEmails.has(m.email)) return false;
     var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
     if (fullMember && fullMember.tracking_mode === 'not_tracked') return false;
+
+    // Skip users handled by the dispatcher (custom schedules / special periods)
+    if (hasActiveSplitSpecialPeriod(new Date())) return false;
+    if (fullMember && fullMember.custom_start_time) return false;
+
     return true;
   });
 

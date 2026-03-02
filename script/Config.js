@@ -501,8 +501,9 @@ function getTodayWorkHours() {
       return Utilities.formatDate(val, 'America/Chicago', 'HH:mm');
     }
     if (typeof val === 'number') {
-      const hours = Math.floor(val);
-      const mins = Math.round((val - hours) * 60);
+      const totalHours = val < 1 && val >= 0 ? val * 24 : val;
+      const hours = Math.floor(totalHours);
+      const mins = Math.round((totalHours - hours) * 60);
       return `${String(hours).padStart(2, '0')}:${String(mins).padStart(2, '0')}`;
     }
     return defaultVal;
@@ -741,8 +742,9 @@ function getUserWorkSchedule(email) {
       return Utilities.formatDate(val, 'America/Chicago', 'HH:mm');
     }
     if (typeof val === 'number') {
-      var hours = Math.floor(val);
-      var mins = Math.round((val - hours) * 60);
+      var totalHours = val < 1 && val >= 0 ? val * 24 : val;
+      var hours = Math.floor(totalHours);
+      var mins = Math.round((totalHours - hours) * 60);
       return String(hours).padStart(2, '0') + ':' + String(mins).padStart(2, '0');
     }
     return defaultVal;
@@ -843,10 +845,10 @@ function hasCustomSchedule(email) {
 }
 
 /**
- * Check if the current special period has split shifts.
+ * Check if the current special period is active.
+ * (We return true for ALL special periods so the dispatcher handles timing correctly, preventing default triggers from firing at wrong times).
  */
 function hasActiveSplitSpecialPeriod() {
   var specialPeriod = getActiveSpecialPeriod(new Date());
-  if (!specialPeriod) return false;
-  return !!(specialPeriod.mt_block2_start || specialPeriod.fri_block2_start);
+  return !!specialPeriod;
 }
