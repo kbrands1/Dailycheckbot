@@ -271,10 +271,20 @@ function onMessage(event) {
         }
 
         var lateMin = getLateMinutesForUser(sender.email);
+        var workspaceStats = null;
+        try {
+          if (typeof getUserWorkspaceStats === 'function') {
+            workspaceStats = getUserWorkspaceStats(sender.email);
+          }
+        } catch (wsErr) {
+          console.error('runeod: Workspace stats failed:', wsErr.message);
+        }
+
         var eodMessage = getEodRequestMessage(
           { email: sender.email, name: sender.displayName },
           eodTasks,
-          lateMin
+          lateMin,
+          workspaceStats
         );
 
         // Send via REST API so tasks/cards are included
@@ -937,7 +947,16 @@ function _sendEodRequests() {
       }
 
       var lateMinutes = getLateMinutesForUser(member.email, todayCheckIns);
-      var eodMessage = getEodRequestMessage(member, tasks, lateMinutes);
+      var workspaceStats = null;
+      try {
+        if (typeof getUserWorkspaceStats === 'function') {
+          workspaceStats = getUserWorkspaceStats(member.email);
+        }
+      } catch (wsErr) {
+        console.error('Error fetching workspace stats for ' + member.email + ':', wsErr.message);
+      }
+
+      var eodMessage = getEodRequestMessage(member, tasks, lateMinutes, workspaceStats);
 
       if (eodMessage.cardsV2) {
         sendDirectMessage(member.email, eodMessage.text, eodMessage.cardsV2);
@@ -1654,7 +1673,17 @@ function dispatchPrompt(member, promptType, config, todayCheckIns, todayEods) {
       }
       var eodTasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
       var lateMin = getLateMinutesForUser(member.email, todayCheckIns);
-      var eodMessage = getEodRequestMessage(member, eodTasks, lateMin);
+
+      var wStats = null;
+      try {
+        if (typeof getUserWorkspaceStats === 'function') {
+          wStats = getUserWorkspaceStats(member.email);
+        }
+      } catch (wsErr) {
+        console.error('Error fetching workspace stats for ' + member.email + ':', wsErr.message);
+      }
+
+      var eodMessage = getEodRequestMessage(member, eodTasks, lateMin, wStats);
       if (eodMessage.cardsV2) {
         sendDirectMessage(member.email, eodMessage.text, eodMessage.cardsV2);
         if (eodMessage.followUpText) sendDirectMessage(member.email, eodMessage.followUpText);

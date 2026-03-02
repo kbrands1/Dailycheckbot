@@ -66,21 +66,29 @@ function getCheckInFollowUpMessage() {
  * @param {object} member - Team member object
  * @param {Array} tasks - ClickUp/Odoo tasks
  * @param {number|null} lateMinutes - Minutes late this morning (null/0 = on time)
+ * @param {object|null} workspaceStats - Workspace activity stats from Admin SDK
  */
-function getEodRequestMessage(member, tasks, lateMinutes) {
+function getEodRequestMessage(member, tasks, lateMinutes, workspaceStats) {
   const config = getConfig();
   var lateNote = '';
   if (lateMinutes && lateMinutes > 0) {
     lateNote = '⏰ _You checked in *' + lateMinutes + ' minute' + (lateMinutes === 1 ? '' : 's') + ' late* this morning. Please ensure on-time check-ins going forward._\n\n';
   }
 
+  var activityBlock = '';
+  if (workspaceStats) {
+    activityBlock = formatWorkspaceStatsBlock(workspaceStats);
+  }
+
+  var fullPrefix = lateNote + activityBlock;
+
   if (config.clickup_config.include_in_eod && tasks && tasks.length > 0) {
-    return buildEodTaskMessage(tasks, lateNote);
+    return buildEodTaskMessage(tasks, fullPrefix);
   }
 
   // No tasks or ClickUp disabled
   return {
-    text: lateNote +
+    text: fullPrefix +
       'Time for your EOD report! 📝\n\n' +
       '🚨 **No ClickUp tasks found.** If you worked on tasks not in ClickUp, please describe them.\n\n' +
       '📝 **Reply with:**\n' +

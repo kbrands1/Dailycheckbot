@@ -223,7 +223,15 @@ function testSendEodRequest() {
   const config = getConfig();
   const email = config.settings.manager_email;
   const tasks = getTasksForUser(email, 'today');
-  const eod = getEodRequestMessage({ email }, tasks, getLateMinutesForUser(email));
+  var wStatsTest = null;
+  try {
+    if (typeof getUserWorkspaceStats === 'function') {
+      wStatsTest = getUserWorkspaceStats(email);
+    }
+  } catch (wsErr) {
+    console.error('testSendEodRequest: Workspace stats failed:', wsErr.message);
+  }
+  const eod = getEodRequestMessage({ email }, tasks, getLateMinutesForUser(email), wStatsTest);
   const result = sendDirectMessage(email, eod.text, eod.cardsV2);
   logPromptSent(email, 'EOD');
   setUserState(email, 'AWAITING_EOD');
