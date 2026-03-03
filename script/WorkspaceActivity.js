@@ -201,16 +201,39 @@ function getUserWorkspaceStats(email) {
     var today = new Date();
     today.setHours(0, 0, 0, 0);
     var startTimeIo = today.toISOString();
+    console.log('Fetching workspace stats for ' + email + ' since ' + startTimeIo);
 
-    var chatStats = getChatActivityForUser(email, startTimeIo);
-    var meetStats = getMeetActivityForUser(email, startTimeIo);
-    var driveStats = getDriveActivityForUser(email, startTimeIo);
+    var chatStats = null;
+    try {
+        chatStats = getChatActivityForUser(email, startTimeIo);
+        console.log('Chat stats for ' + email + ': ' + JSON.stringify(chatStats));
+    } catch (e) {
+        console.error('Chat activity fetch failed for ' + email + ':', e.message);
+    }
 
-    return {
+    var meetStats = null;
+    try {
+        meetStats = getMeetActivityForUser(email, startTimeIo);
+        console.log('Meet stats for ' + email + ': ' + JSON.stringify(meetStats));
+    } catch (e) {
+        console.error('Meet activity fetch failed for ' + email + ':', e.message);
+    }
+
+    var driveStats = null;
+    try {
+        driveStats = getDriveActivityForUser(email, startTimeIo);
+        console.log('Drive stats for ' + email + ': ' + JSON.stringify(driveStats));
+    } catch (e) {
+        console.error('Drive activity fetch failed for ' + email + ':', e.message);
+    }
+
+    var result = {
         chat: chatStats,
         meet: meetStats,
         drive: driveStats
     };
+    console.log('Workspace stats result for ' + email + ': ' + JSON.stringify(result));
+    return result;
 }
 
 /**
@@ -249,5 +272,5 @@ function formatWorkspaceStatsBlock(stats) {
 
     if (!hasData) return '';
 
-    return '📊 *Today\'s Google Workspace Activity*\\n' + lines.join('\\n') + '\\n\\n';
+    return '\ud83d\udcca *Today\'s Google Workspace Activity*\n' + lines.join('\n') + '\n\n';
 }

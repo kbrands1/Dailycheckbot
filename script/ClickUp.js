@@ -245,7 +245,7 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
     `assignees[]=${clickUpUserId}&` +
     `due_date_lt=${dueDateLt}&` +
     (dueDateGt > 0 ? `due_date_gt=${dueDateGt}&` : '') +
-    `include_closed=false&` +
+    `include_closed=true&` +
     `subtasks=false`;
 
   const result = clickUpRequest(endpoint);
@@ -259,8 +259,22 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
 
+  // Filter: exclude tasks that were closed BEFORE today (old completed tasks)
+  // Keep: open tasks + tasks closed today (so completed-today tasks appear)
+  var filteredTasks = result.tasks.filter(function (task) {
+    var statusType = task.status && task.status.type ? task.status.type : 'open';
+    if (statusType !== 'closed') return true; // Keep all non-closed tasks
+
+    // For closed tasks, only keep if closed today (date_closed is ms timestamp)
+    if (task.date_closed) {
+      var closedDate = new Date(parseInt(task.date_closed));
+      return closedDate >= startOfToday; // Keep if closed today
+    }
+    return false; // No close date on a closed task — skip
+  });
+
   // Enrich with list info and calculate overdue
-  return result.tasks.map(task => {
+  return filteredTasks.map(task => {
     const list = structure.lists.find(l => l.id === task.list.id);
     const dueDate = task.due_date ? new Date(parseInt(task.due_date)) : null;
     const isOverdue = dueDate && dueDate < startOfToday;

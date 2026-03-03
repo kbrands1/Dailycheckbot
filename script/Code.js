@@ -37,8 +37,8 @@ function getUserState(email) {
   var state = parts[0];
   var timestamp = parts[1] ? new Date(parts[1]) : null;
 
-  // Expire after 4 hours
-  if (timestamp && (Date.now() - timestamp.getTime() > 4 * 3600 * 1000)) {
+  // Expire after 8 hours (extended to prevent premature EOD state expiry)
+  if (timestamp && (Date.now() - timestamp.getTime() > 8 * 3600 * 1000)) {
     props.deleteProperty(key);
     return 'IDLE';
   }
@@ -449,7 +449,7 @@ function onMessage(event) {
         var completedCount = todayActions.filter(function (a) { return a.action_type === 'COMPLETE'; }).length;
         var anyActions = todayActions.length > 0;
         // Flag if user had tasks shown but completed none, unless they explain why
-        if (completedCount === 0 && !lowerText.match(/no tasks|didn.t complete|couldn.t|was in meetings|sick|pto|out of office|off today/)) {
+        if (completedCount === 0 && !lowerText.match(/no tasks|didn.t complete|couldn.t|was in meetings|meetings all day|sick|pto|out of office|off today|no clickup|not in clickup|worked on other|admin work|support|emails|training|onboarding/)) {
           noTasksCompleted = true;
         }
       } catch (e) {
@@ -781,6 +781,8 @@ function extractHoursWorked(text) {
     /hours?\s*(?:worked|today)?\s*:?\s*(\d+\.?\d*)/i,
     /(\d+\.?\d*)\s*(?:hours?|hrs?|h)\b/i,
     /worked\s+(\d+\.?\d*)\s*(?:hours?|hrs?|h)?/i,
+    /total\s*(?:time|hours?)\s*:?\s*(\d+\.?\d*)\s*(?:hours?|hrs?|h)?/i,
+    /time\s*:?\s*(\d+\.?\d*)\s*(?:hours?|hrs?|h)?/i,
     /^\s*(\d+\.?\d*)\s*$/  // bare number (for follow-up)
   ];
 
@@ -1024,6 +1026,14 @@ function _postMorningSummary() {
  */
 function _sendEodRequests() {
   console.log('Sending EOD requests...');
+
+  // Clear ClickUp cache so we pick up tasks created/completed during the day
+  try {
+    clearClickUpCache();
+    console.log('ClickUp cache cleared for fresh EOD task pull');
+  } catch (cacheErr) {
+    console.error('Error clearing ClickUp cache:', cacheErr.message);
+  }
 
   var teamMembers = getCachedWorkingEmployees();
   var config = getConfig();
