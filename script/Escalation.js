@@ -45,6 +45,11 @@ function escalateMissedEod(memberEmail, memberName) {
       tasks = getTasksForUser(memberEmail, 'today');
     }
 
+    // Commented out handleClickUpCompliance as per instruction
+    // if (config.clickup_config && config.clickup_config.enabled) {
+    //   handleClickUpCompliance(memberEmail, tasks);
+    // }
+
     var wStatsEsc = null;
     try {
       if (typeof getUserWorkspaceStats === 'function') {
@@ -55,12 +60,11 @@ function escalateMissedEod(memberEmail, memberName) {
     }
 
     var complianceWarnEsc = null;
-    try {
-      if (typeof handleClickUpCompliance === 'function') {
-        complianceWarnEsc = handleClickUpCompliance(memberEmail, tasks.length);
-      }
-    } catch (cwErr) {
-      console.error('escalateMissedEod: Compliance warning failed:', cwErr.message);
+    // Escalation should not increment streak again - it was already incremented when the EOD prompt was generated at 4:30 PM.
+    // If they respond to the escalation but still have 0 tasks, it will not increment again.
+    // However, if they had 0 tasks, we can still output a generic warning string by checking here locally.
+    if (tasks.length === 0) {
+      complianceWarnEsc = '🚨 Reminder: Please ensure you create and track ClickUp tasks for tomorrow.';
     }
 
     var eodMessage = getEodRequestMessage({ email: memberEmail, name: memberName }, tasks, getLateMinutesForUser(memberEmail), wStatsEsc, complianceWarnEsc);

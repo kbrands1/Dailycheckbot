@@ -118,19 +118,16 @@ function getLateMinutesForUser(email, checkInsCache) {
     var isLate = userCheckIn.is_late === true || userCheckIn.is_late === 'true';
     if (!isLate) return 0;
 
-    // Calculate minutes late from checkin_timestamp vs schedule start
+    // Calculate minutes late from checkin_timestamp vs schedule start parsing local time
     var schedule = getUserWorkSchedule(email);
-    var parts = schedule.blocks[0].start.split(':');
-    var startHour = parseInt(parts[0]);
-    var startMin = parseInt(parts[1]);
+    var startMins = timeToMinutes(schedule.blocks[0].start);
     var graceMinutes = getLateThresholdMin();
 
-    var checkinTime = new Date(userCheckIn.checkin_timestamp);
-    var threshold = new Date(checkinTime);
-    threshold.setHours(startHour, startMin + graceMinutes, 0, 0);
+    var checkinTimeStr = Utilities.formatDate(new Date(userCheckIn.checkin_timestamp), 'America/Chicago', 'HH:mm');
+    var checkinMins = timeToMinutes(checkinTimeStr);
 
-    var diffMs = checkinTime.getTime() - threshold.getTime();
-    return diffMs > 0 ? Math.ceil(diffMs / 60000) : 0;
+    var diffMins = checkinMins - (startMins + graceMinutes);
+    return diffMins > 0 ? diffMins : 0;
   } catch (e) {
     console.error('getLateMinutesForUser error for ' + email + ':', e.message);
     return 0;
@@ -331,7 +328,7 @@ function onMessage(event) {
           console.error('runeod: Workspace stats failed:', wsErr.message);
         }
 
-        var complianceWarning = handleClickUpCompliance(sender.email, eodTasks.length);
+        var complianceWarning = null; // Test does not increment compliance strike
 
         var eodMessage = getEodRequestMessage(
           { email: sender.email, name: sender.displayName },
@@ -411,12 +408,7 @@ function onMessage(event) {
             }
           } catch (wsErr) { console.error('refresh: Workspace stats failed:', wsErr.message); }
 
-          var compWarn2 = null;
-          try {
-            if (typeof handleClickUpCompliance === 'function') {
-              compWarn2 = handleClickUpCompliance(sender.email, refreshTasks.length);
-            }
-          } catch (cwErr) { console.error('refresh: Compliance warning failed:', cwErr.message); }
+          var compWarn2 = null; // Refreshing should NOT re-trigger compliance strikes
 
           var refreshEodMsg = getEodRequestMessage(
             { email: sender.email, name: sender.displayName },
@@ -625,7 +617,7 @@ function handleCheckInResponse(email, name, text) {
 function handleEodResponse(email, name, text) {
   // Save payload to process asynchronously
   var props = PropertiesService.getScriptProperties();
-  var eodId = 'EOD_' + new Date().getTime() + '_' + Math.floor(Math.random() * 1000);
+  var eodId = 'EOD_QUEUE_' + new Date().getTime() + '_' + Math.floor(Math.random() * 1000);
   props.setProperty(eodId, JSON.stringify({
     email: email,
     name: name,
@@ -633,14 +625,9 @@ function handleEodResponse(email, name, text) {
     timestamp: new Date().getTime()
   }));
 
-  // Trigger background processor to run immediately
-  ScriptApp.newTrigger('processEodBackground')
-    .timeBased()
-    .after(1)
-    .create();
-
   // Return instantly to avoid 30s timeout on Google Chat request
-  return createChatResponse('⏳ *Processing your EOD report...*\nI am evaluating your tasks and hours. I will reply here shortly!');
+  // NOTE: A separate 1-minute time-driven trigger MUST be manually created for processEodBackground
+  return createChatResponse('⏳ *Processing your EOD report...*\nI am evaluating your tasks and hours. I will send your results in a new message shortly!');
 }
 
 /**
@@ -648,38 +635,34 @@ function handleEodResponse(email, name, text) {
  * @param {Object} e - Trigger event
  */
 function processEodBackground(e) {
-  // Clean up the trigger so it doesn't pile up
-  if (e && e.triggerUid) {
-    try {
-      var triggers = ScriptApp.getProjectTriggers();
-      for (var i = 0; i < triggers.length; i++) {
-        if (triggers[i].getHandlerFunction() === 'processEodBackground' && triggers[i].getUniqueId() === e.triggerUid) {
-          ScriptApp.deleteTrigger(triggers[i]);
-          break;
-        }
-      }
-    } catch (triggerErr) {
-      console.error('Failed to clean up EOD trigger:', triggerErr.message);
-    }
+  var lock = LockService.getScriptLock();
+  // Wait up to 30 seconds for other executions to finish
+  if (!lock.tryLock(30000)) {
+    console.warn('Could not acquire lock for processEodBackground. Retrying next minute.');
+    return;
   }
 
-  var props = PropertiesService.getScriptProperties();
-  var allProps = props.getProperties();
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var allProps = props.getProperties();
 
-  for (var key in allProps) {
-    // Only process pending EODs
-    if (key.indexOf('EOD_') === 0 && key.indexOf('EOD_RETRY_') === -1) {
-      try {
-        var payload = JSON.parse(allProps[key]);
-        _processSingleEod(payload.email, payload.name, payload.text, new Date(payload.timestamp));
-        // Delete after successful processing
-        props.deleteProperty(key);
-      } catch (err) {
-        console.error('Error processing background EOD (' + key + '):', err.message);
-        // We delete it anyway so it doesn't infinitely loop and crash the script quota
-        props.deleteProperty(key);
+    for (var key in allProps) {
+      // Only process pending EODs, strict prefix match to avoid collisions
+      if (key.indexOf('EOD_QUEUE_') === 0) {
+        try {
+          var payload = JSON.parse(allProps[key]);
+          _processSingleEod(payload.email, payload.name, payload.text, new Date(payload.timestamp));
+          // Delete after successful processing
+          props.deleteProperty(key);
+        } catch (err) {
+          console.error('Error processing background EOD (' + key + '):', err.message);
+          // We delete it anyway so it doesn't infinitely loop and crash the script quota
+          props.deleteProperty(key);
+        }
       }
     }
+  } finally {
+    lock.releaseLock();
   }
 }
 
@@ -1035,7 +1018,8 @@ function _postMorningSummary() {
       var schedule = getUserWorkSchedule(m.email);
       if (schedule && schedule.blocks && schedule.blocks.length > 0) {
         var startMin = timeToMinutes(schedule.blocks[0].start);
-        var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+        var localTimeStr = Utilities.formatDate(new Date(), 'America/Chicago', 'HH:mm');
+        var nowMin = timeToMinutes(localTimeStr);
         // If their shift hasn't started (plus 30m grace), they aren't "missing" yet
         if (nowMin < startMin + 30) return false;
       }
@@ -1234,7 +1218,8 @@ function _postEodSummary() {
       var schedule = getUserWorkSchedule(m.email);
       if (schedule && schedule.blocks && schedule.blocks.length > 0) {
         var endMin = timeToMinutes(schedule.blocks[schedule.blocks.length - 1].end);
-        var nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+        var localTimeStr = Utilities.formatDate(new Date(), 'America/Chicago', 'HH:mm');
+        var nowMin = timeToMinutes(localTimeStr);
         // If their shift hasn't ended, they aren't "missing" EOD yet
         if (nowMin < endMin) return false;
       }
@@ -1783,6 +1768,7 @@ function triggerScheduleDispatcher() {
       if (isTimeForPrompt(member.email, eodType)) {
         var dedupKey = 'DISPATCH_' + eodType + '_' + member.email + '_' + todayStr;
         if (!cache.get(dedupKey)) {
+          if (!todayCheckIns) todayCheckIns = getTodayCheckIns(); // Issue 11 Fix
           if (!todayEods) todayEods = getTodayEodReports();
           try {
             dispatchPrompt(member, eodType, config, todayCheckIns, todayEods);
@@ -1803,26 +1789,28 @@ function triggerScheduleDispatcher() {
  */
 function isTimeForPrompt(email, promptType) {
   var schedule = getUserWorkSchedule(email);
-  var now = new Date();
-  var nowMinutes = now.getHours() * 60 + now.getMinutes();
+  // Fixed Issue 5, 9, 10: Use exact local time to avoid UTC mismatch in trigger environment
+  var localTimeStr = Utilities.formatDate(new Date(), 'America/Chicago', 'HH:mm');
+  var nowMinutes = timeToMinutes(localTimeStr);
   var WINDOW = 15;
 
   var block1Start = timeToMinutes(schedule.blocks[0].start);
   var lastBlockEnd = timeToMinutes(schedule.blocks[schedule.blocks.length - 1].end);
 
+  // Issues 5: narrowed windows from 3 hours to 15 mins to prevent overlap
   switch (promptType) {
     case 'CHECKIN':
-      return nowMinutes >= block1Start && nowMinutes <= block1Start + 180;
+      return nowMinutes >= block1Start && nowMinutes <= block1Start + WINDOW;
     case 'CHECKIN_FOLLOWUP':
-      return nowMinutes >= block1Start + 20 && nowMinutes <= block1Start + 180;
+      return nowMinutes >= block1Start + 20 && nowMinutes <= block1Start + 20 + WINDOW;
     case 'ESCALATION_CHECKIN':
-      return nowMinutes >= block1Start + 45 && nowMinutes <= block1Start + 180;
+      return nowMinutes >= block1Start + 45 && nowMinutes <= block1Start + 45 + WINDOW;
     case 'EOD':
-      return nowMinutes >= lastBlockEnd - 45 && nowMinutes <= lastBlockEnd + 120;
+      return nowMinutes >= lastBlockEnd - 45 && nowMinutes <= lastBlockEnd - 45 + WINDOW;
     case 'EOD_FOLLOWUP':
-      return nowMinutes >= lastBlockEnd - 10 && nowMinutes <= lastBlockEnd + 120;
+      return nowMinutes >= lastBlockEnd - 10 && nowMinutes <= lastBlockEnd - 10 + WINDOW;
     case 'ESCALATION_EOD':
-      return nowMinutes >= lastBlockEnd + 15 && nowMinutes <= lastBlockEnd + 120;
+      return nowMinutes >= lastBlockEnd + 15 && nowMinutes <= lastBlockEnd + 15 + WINDOW;
     default:
       return false;
   }

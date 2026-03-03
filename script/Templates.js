@@ -480,8 +480,13 @@ function buildAiEvaluationPrompt(teamData, lastEvaluation) {
     prompt += '\n';
 
     // Today's data
-    prompt += '**Today:** Check-in: ' + (member.checkedIn ? 'Yes' : 'NO') + (member.isLate ? ' (Late)' : '');
-    prompt += ' | EOD: ' + (member.eodSubmitted ? 'Yes' : 'NO');
+    var checkinText = member.checkedIn ? 'Yes (at ' + (member.actualStart || 'Unknown') + ', scheduled: ' + member.schedStart + ')' : 'NO';
+    if (member.isLate) checkinText += ' [LATE]';
+
+    var eodText = member.eodSubmitted ? 'Yes (at ' + (member.actualEnd || 'Unknown') + ', scheduled: ' + member.schedEnd + ')' : 'NO';
+
+    prompt += '**Today:** Check-in: ' + checkinText;
+    prompt += ' | EOD: ' + eodText;
     prompt += ' | Hours: ' + (member.hoursReported !== null ? member.hoursReported + 'h' : 'NOT REPORTED');
     prompt += ' (expected: ' + member.expectedHoursToday + 'h)\n';
 

@@ -233,13 +233,8 @@ function testSendEodRequest() {
   }
 
   var complianceWarnTest = null;
-  try {
-    if (typeof handleClickUpCompliance === 'function') {
-      complianceWarnTest = handleClickUpCompliance(email, tasks.length);
-    }
-  } catch (cwErr) {
-    console.error('testSendEodRequest: Compliance warning failed:', cwErr.message);
-  }
+  // Test command does not trigger compliance tracker to avoid skewing real data
+  console.log('Skipping compliance tracker in testSendEodRequest');
 
   const eod = getEodRequestMessage({ email }, tasks, getLateMinutesForUser(email), wStatsTest, complianceWarnTest);
   const result = sendDirectMessage(email, eod.text, eod.cardsV2);
