@@ -386,6 +386,59 @@ function onMessage(event) {
     }
 
     if (userState === 'AWAITING_EOD' || (TEST_MODE && lowerText === 'completed testing tasks. no blockers. tomorrow: continue testing.')) {
+
+      // --- REFRESH: re-pull ClickUp tasks and re-send EOD cards ---
+      if (lowerText === 'refresh' || lowerText === 'refresh tasks' || lowerText === 'reload') {
+        try {
+          var config2 = getConfig();
+          var refreshTasks = [];
+          if (config2.clickup_config && config2.clickup_config.enabled) {
+            refreshTasks = getTasksForUser(sender.email, 'today');
+          }
+
+          var lateMin2 = getLateMinutesForUser(sender.email);
+          var wStats2 = null;
+          try {
+            if (typeof getUserWorkspaceStats === 'function') {
+              wStats2 = getUserWorkspaceStats(sender.email);
+            }
+          } catch (wsErr) { console.error('refresh: Workspace stats failed:', wsErr.message); }
+
+          var compWarn2 = null;
+          try {
+            if (typeof handleClickUpCompliance === 'function') {
+              compWarn2 = handleClickUpCompliance(sender.email, refreshTasks.length);
+            }
+          } catch (cwErr) { console.error('refresh: Compliance warning failed:', cwErr.message); }
+
+          var refreshEodMsg = getEodRequestMessage(
+            { email: sender.email, name: sender.displayName },
+            refreshTasks,
+            lateMin2,
+            wStats2,
+            compWarn2
+          );
+
+          // Send refreshed EOD message via REST API so cards render
+          if (refreshEodMsg.cardsV2) {
+            sendDirectMessage(sender.email, refreshEodMsg.text, refreshEodMsg.cardsV2);
+            if (refreshEodMsg.followUpText) {
+              sendDirectMessage(sender.email, refreshEodMsg.followUpText);
+            }
+          } else {
+            sendDirectMessage(sender.email, refreshEodMsg.text);
+          }
+
+          // Reset retry count since it's a fresh EOD prompt
+          clearEodRetryCount(sender.email);
+
+          console.log('EOD refreshed for ' + sender.email + ' with ' + refreshTasks.length + ' tasks');
+          return createChatResponse('🔄 **Tasks refreshed!** I\'ve re-sent your EOD prompt with ' + refreshTasks.length + ' task(s) from ClickUp. Please use the task cards above to mark each task, then submit your EOD summary.');
+        } catch (refreshErr) {
+          console.error('Error refreshing EOD for ' + sender.email + ':', refreshErr.message);
+          return createChatResponse('❌ Error refreshing tasks: ' + refreshErr.message + '. Please try again.');
+        }
+      }
       var retryCount = getEodRetryCount(sender.email);
       var validation = validateEodSubmission(text);
 

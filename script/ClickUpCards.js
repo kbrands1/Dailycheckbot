@@ -232,7 +232,8 @@ function buildEodTaskMessage(tasks, lateNote) {
     '*Blockers/Issues:* [what > owner > deadline] _(if any)_\n' +
     '―――――――――――――――――――\n' +
     '⚠️ You must update your task cards (✅ Done / 🔄 In Progress / ➡️ Tomorrow) before submitting.\n' +
-    'If you didn\'t complete any tasks today, explain why in your reply.';
+    'If you didn\'t complete any tasks today, explain why in your reply.\n\n' +
+    '🔄 _Created new tasks in ClickUp? Say *refresh* to reload your task cards._';
 
   if (!tasks || tasks.length === 0) {
     return {
@@ -253,7 +254,7 @@ function buildEodTaskMessage(tasks, lateNote) {
 
   const cards = tasks.slice(0, 10).map((task, i) => buildTaskCard(task, i)); // Limit to 10 cards
 
-  let text = lateNote + `Time for your EOD report! 📝\n\n📋 **Tasks due today:** ${tasks.length}\nUpdate each task card below, then reply with your EOD summary.`;
+  let text = lateNote + `Time for your EOD report! 📝\n\n📋 **Tasks due today:** ${tasks.length}\nUpdate each task card below, then reply with your EOD summary.\n\n🔄 _Created new tasks in ClickUp? Say *refresh* to reload your task cards._`;
 
   if (tasks.length > 10) {
     text += `\n\n(Showing first 10 of ${tasks.length} tasks)`;

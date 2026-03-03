@@ -101,7 +101,8 @@ function getEodRequestMessage(member, tasks, lateMinutes, workspaceStats, compli
       '  _(or "0 meetings" if none)_\n' +
       '*Tomorrow:* [Task 1 + CU link] | [Task 2 + CU link]\n' +
       '*Blockers/Issues:* [what > owner > deadline] _(if any)_\n' +
-      '―――――――――――――――――――',
+      '―――――――――――――――――――\n\n' +
+      '🔄 _Created new tasks in ClickUp? Say *refresh* to reload your task cards._',
     cardsV2: null
   };
 }
