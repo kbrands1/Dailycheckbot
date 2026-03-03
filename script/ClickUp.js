@@ -246,7 +246,7 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
     `due_date_lt=${dueDateLt}&` +
     (dueDateGt > 0 ? `due_date_gt=${dueDateGt}&` : '') +
     `include_closed=true&` +
-    `subtasks=false`;
+    `subtasks=true`;
 
   const result = clickUpRequest(endpoint);
 
@@ -484,7 +484,7 @@ function getAllOverdueTasks() {
   const endpoint = `/team/${structure.teamId}/task?` +
     `due_date_lt=${startOfToday.getTime()}&` +
     `include_closed=false&` +
-    `subtasks=false`;
+    `subtasks=true`;
 
   const result = clickUpRequest(endpoint);
 

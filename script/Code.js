@@ -463,11 +463,16 @@ function onMessage(event) {
         console.error('Task completion check failed:', e.message);
       }
 
-      if ((!validation.isValid || noTasksCompleted) && retryCount < 2) {
-        var newCount = incrementEodRetryCount(sender.email);
-        var allMissing = validation.missingFields;
-        console.log('EOD rejected for ' + sender.email + ': missing ' + allMissing.join(', ') + (noTasksCompleted ? ' + no tasks completed' : '') + ' (retry ' + newCount + '/2)');
-        return createChatResponse(buildEodRejectionMessage(allMissing, newCount, noTasksCompleted));
+      if ((!validation.isValid || (noTasksCompleted && retryCount === 0)) && retryCount < 2) {
+        // If their text format is perfect, don't force a retry just for unclicked tasks if they've already been warned once
+        if (validation.isValid && noTasksCompleted && retryCount > 0) {
+          // Fall through to accept
+        } else if (!validation.isValid || noTasksCompleted) {
+          var newCount = incrementEodRetryCount(sender.email);
+          var allMissing = validation.missingFields;
+          console.log('EOD rejected for ' + sender.email + ': missing ' + allMissing.join(', ') + (noTasksCompleted ? ' + no tasks completed' : '') + ' (retry ' + newCount + '/2)');
+          return createChatResponse(buildEodRejectionMessage(allMissing, newCount, noTasksCompleted));
+        }
       }
       clearUserState(sender.email);
       clearEodRetryCount(sender.email);
@@ -615,13 +620,76 @@ function handleCheckInResponse(email, name, text) {
 }
 
 /**
- * Handle EOD response
+ * Handle EOD response - now async to prevent 30s timeout
  */
 function handleEodResponse(email, name, text) {
+  // Save payload to process asynchronously
+  var props = PropertiesService.getScriptProperties();
+  var eodId = 'EOD_' + new Date().getTime() + '_' + Math.floor(Math.random() * 1000);
+  props.setProperty(eodId, JSON.stringify({
+    email: email,
+    name: name,
+    text: text,
+    timestamp: new Date().getTime()
+  }));
+
+  // Trigger background processor to run immediately
+  ScriptApp.newTrigger('processEodBackground')
+    .timeBased()
+    .after(1)
+    .create();
+
+  // Return instantly to avoid 30s timeout on Google Chat request
+  return createChatResponse('⏳ *Processing your EOD report...*\nI am evaluating your tasks and hours. I will reply here shortly!');
+}
+
+/**
+ * Background trigger to process EOD reports
+ * @param {Object} e - Trigger event
+ */
+function processEodBackground(e) {
+  // Clean up the trigger so it doesn't pile up
+  if (e && e.triggerUid) {
+    try {
+      var triggers = ScriptApp.getProjectTriggers();
+      for (var i = 0; i < triggers.length; i++) {
+        if (triggers[i].getHandlerFunction() === 'processEodBackground' && triggers[i].getUniqueId() === e.triggerUid) {
+          ScriptApp.deleteTrigger(triggers[i]);
+          break;
+        }
+      }
+    } catch (triggerErr) {
+      console.error('Failed to clean up EOD trigger:', triggerErr.message);
+    }
+  }
+
+  var props = PropertiesService.getScriptProperties();
+  var allProps = props.getProperties();
+
+  for (var key in allProps) {
+    // Only process pending EODs
+    if (key.indexOf('EOD_') === 0 && key.indexOf('EOD_RETRY_') === -1) {
+      try {
+        var payload = JSON.parse(allProps[key]);
+        _processSingleEod(payload.email, payload.name, payload.text, new Date(payload.timestamp));
+        // Delete after successful processing
+        props.deleteProperty(key);
+      } catch (err) {
+        console.error('Error processing background EOD (' + key + '):', err.message);
+        // We delete it anyway so it doesn't infinitely loop and crash the script quota
+        props.deleteProperty(key);
+      }
+    }
+  }
+}
+
+/**
+ * The original heavy EOD processing logic
+ */
+function _processSingleEod(email, name, text, now) {
   // Log prompt response for adoption tracking
   logPromptResponse(email, 'EOD');
 
-  var now = new Date();
   var isFriday = now.getDay() === 5;
   var config = getConfig();
 
@@ -741,7 +809,7 @@ function handleEodResponse(email, name, text) {
     console.error('Failed to forward EOD to manager:', fwdErr.message);
   }
 
-  return createChatResponse(response);
+  sendDirectMessage(email, response);
 }
 
 /**
