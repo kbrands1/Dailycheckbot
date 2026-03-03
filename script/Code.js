@@ -390,6 +390,9 @@ function onMessage(event) {
       // --- REFRESH: re-pull ClickUp tasks and re-send EOD cards ---
       if (lowerText === 'refresh' || lowerText === 'refresh tasks' || lowerText === 'reload') {
         try {
+          // Clear cache to ensure we get absolute fresh data including new tasks
+          try { clearClickUpCache(); } catch (e) { }
+
           var config2 = getConfig();
           var refreshTasks = [];
           if (config2.clickup_config && config2.clickup_config.enabled) {
