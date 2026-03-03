@@ -300,8 +300,12 @@ function onMessage(event) {
     }
 
     if (lowerText === 'refresh' || lowerText === 'refresh lists') {
-      clearClickUpCache();
-      return createChatResponse("🔄 ClickUp data refreshed!");
+      if (userState !== 'AWAITING_EOD') {
+        clearClickUpCache();
+        return createChatResponse("🔄 ClickUp data refreshed!");
+      }
+      // If they ARE in AWAITING_EOD, do nothing here and let it fall through 
+      // to the EOD-specific refresh handler below
     }
 
     // Test commands (for development) — single-word to avoid matching issues
