@@ -25,7 +25,7 @@ function setUserState(email, state) {
 
 /**
  * Get conversation state for a user
- * Returns IDLE if state is missing or expired (4 hour TTL)
+ * Returns IDLE if state is missing or expired (8 hour TTL)
  */
 function getUserState(email) {
   var props = PropertiesService.getScriptProperties();
@@ -82,7 +82,7 @@ function handleClickUpCompliance(email, taskCount) {
     var warning = '🚨 This is tracked - you did not follow directions to create ClickUp tasks. Please make sure to do it tomorrow.';
 
     if (streak >= 3) {
-      warning += '\n\n⚠️ **WARNING: You have had no tasks for ' + streak + ' consecutive days. This is now being reported to Khalid.**';
+      warning += '\n\n⚠️ **WARNING: You have had no tasks for ' + streak + ' consecutive days. This is now being reported to management.**';
 
       // Trigger escalation (safe check if function exists)
       if (typeof escalateClickUpCompliance === 'function') {
@@ -264,6 +264,7 @@ function onMessage(event) {
     }
 
     var lowerText = text.toLowerCase().trim();
+    var userState = getUserState(sender.email);
 
     // Weekend/after-hours guard: acknowledge but don't process as check-in/EOD
     if (!isWorkday()) {
@@ -377,7 +378,6 @@ function onMessage(event) {
     }
 
     // === State-based routing (BUG #2, #3, #4 fix) ===
-    var userState = getUserState(sender.email);
     console.log("User state for " + sender.email + ": " + userState);
 
     if (userState === 'AWAITING_CHECKIN') {
@@ -578,6 +578,10 @@ function onCardClick(event) {
       return handleDelayReasonSelected(event);
     case 'handleCompleteWithHours':
       return handleCompleteWithHours(event);
+    case 'handleCheckIn':
+      return handleCheckInButton(event);
+    case 'handleStartEod':
+      return handleStartEodButton(event);
     default:
       console.warn('Unknown action: ' + actionName);
       return createChatResponse('Unknown action');
@@ -595,20 +599,141 @@ function handleCheckInResponse(email, name, text) {
   var schedule = getUserWorkSchedule(email);
   var now = new Date();
 
-  var parts = schedule.blocks[0].start.split(':');
-  var startHour = parseInt(parts[0]);
-  var startMin = parseInt(parts[1]);
   var graceMinutes = getLateThresholdMin();
-  var totalGraceMin = startMin + graceMinutes;
-  var lateThreshold = new Date(now);
-  lateThreshold.setHours(startHour + Math.floor(totalGraceMin / 60), totalGraceMin % 60, 0, 0);
+  var scheduleMinutes = timeToMinutes(schedule.blocks[0].start) + graceMinutes;
+  var nowChicago = Utilities.formatDate(now, 'America/Chicago', 'HH:mm');
+  var nowMinutes = timeToMinutes(nowChicago);
   var lowerText = text.toLowerCase();
 
-  var isLate = TEST_MODE && lowerText === 'here - late test' ? true : (TEST_MODE && lowerText === 'here - testing check-in flow' ? false : now > lateThreshold);
+  var isLate = TEST_MODE && lowerText === 'here - late test' ? true : (TEST_MODE && lowerText === 'here - testing check-in flow' ? false : nowMinutes > scheduleMinutes);
 
   logCheckIn(email, now, text, isLate);
 
   return createChatResponse(getCheckInConfirmation(isLate));
+}
+
+/**
+ * Handle Check In button click from morning card
+ * Logs attendance, fetches tasks, sends interactive task cards
+ */
+function handleCheckInButton(event) {
+  var user = event.user || (event.chat && event.chat.user) || {};
+  var email = user.email;
+  var name = user.displayName || (email ? email.split('@')[0] : 'Unknown');
+
+  if (!email) {
+    return createChatResponse('Error: Could not determine your email.');
+  }
+
+  // Log attendance
+  logPromptResponse(email, 'CHECKIN');
+  var schedule = getUserWorkSchedule(email);
+  var now = new Date();
+  var graceMinutes = getLateThresholdMin();
+  var scheduleMinutes = timeToMinutes(schedule.blocks[0].start) + graceMinutes;
+  var nowChicago = Utilities.formatDate(now, 'America/Chicago', 'HH:mm');
+  var nowMinutes = timeToMinutes(nowChicago);
+  var isLate = nowMinutes > scheduleMinutes;
+  logCheckIn(email, now, 'Button check-in', isLate);
+
+  // Fetch tasks
+  var config = getConfig();
+  var tasks = [];
+  try {
+    if (config.clickup_config && config.clickup_config.enabled) {
+      tasks = getTasksForUser(email, 'today');
+    }
+  } catch (err) {
+    console.error('handleCheckInButton: task fetch failed:', err.message);
+  }
+
+  // Categorize
+  var cat = categorizeTasks(tasks, email);
+
+  // Build confirmation text
+  var confirmText = getCheckInConfirmation(isLate) + '\n\n';
+  if (cat.completedCount > 0) {
+    confirmText += '✅ *' + cat.completedCount + ' task(s) completed today so far*\n\n';
+  }
+
+  // Build cards for open tasks
+  var allOpenTasks = cat.overdue.concat(cat.inProgress).concat(cat.dueTodayNotStarted);
+  if (allOpenTasks.length > 0) {
+    var taskCards = allOpenTasks.slice(0, 10).map(function(task, i) { return buildTaskCard(task, i); });
+    var cardText = confirmText + '📋 Here are your tasks for today (' + allOpenTasks.length + ' task' + (allOpenTasks.length === 1 ? '' : 's') + '):';
+    if (cat.overdue.length > 0) {
+      cardText += '\n⚠️ *' + cat.overdue.length + ' overdue* — please prioritize these.';
+    }
+    if (cat.inProgress.length > 0) {
+      cardText += '\n🔄 *' + cat.inProgress.length + ' in progress*';
+    }
+    sendDirectMessage(email, cardText, taskCards);
+  } else {
+    sendDirectMessage(email, confirmText + '📋 No open tasks due today. Make sure to create ClickUp tasks for everything you work on.');
+  }
+
+  // Replace the check-in card with confirmation
+  return createChatResponse({
+    actionResponse: { type: 'UPDATE_MESSAGE' },
+    text: isLate
+      ? '⏰ Checked in (late) at ' + nowChicago + '. Tasks sent above.'
+      : '✅ Checked in at ' + nowChicago + '. Tasks sent above.'
+  });
+}
+
+/**
+ * Handle Start EOD button click
+ * Fetches tasks, sends interactive task cards + EOD format guide, sets AWAITING_EOD
+ */
+function handleStartEodButton(event) {
+  var user = event.user || (event.chat && event.chat.user) || {};
+  var email = user.email;
+  var name = user.displayName || (email ? email.split('@')[0] : 'Unknown');
+
+  if (!email) {
+    return createChatResponse('Error: Could not determine your email.');
+  }
+
+  // Fetch tasks (fresh pull)
+  var config = getConfig();
+  try { clearClickUpCache(); } catch (e) { }
+
+  var tasks = [];
+  try {
+    if (config.clickup_config && config.clickup_config.enabled) {
+      tasks = getTasksForUser(email, 'today');
+    }
+  } catch (err) {
+    console.error('handleStartEodButton: task fetch failed:', err.message);
+  }
+
+  // Categorize
+  var cat = categorizeTasks(tasks, email);
+
+  // Build the EOD task message using existing builder
+  var allOpenTasks = cat.overdue.concat(cat.inProgress).concat(cat.dueTodayNotStarted);
+  var completedNote = cat.completedCount > 0 ? '✅ *' + cat.completedCount + ' task(s) completed today*\n\n' : '';
+  var eodMessage = buildEodTaskMessage(allOpenTasks, completedNote);
+
+  // Send task cards + format guide via REST API
+  if (eodMessage.cardsV2) {
+    sendDirectMessage(email, eodMessage.text, eodMessage.cardsV2);
+    if (eodMessage.followUpText) {
+      sendDirectMessage(email, eodMessage.followUpText);
+    }
+  } else {
+    sendDirectMessage(email, eodMessage.text);
+  }
+
+  // Set state and clear retry count
+  setUserState(email, 'AWAITING_EOD');
+  clearEodRetryCount(email);
+
+  // Replace the Start EOD card with confirmation
+  return createChatResponse({
+    actionResponse: { type: 'UPDATE_MESSAGE' },
+    text: '📝 EOD started! Update your task cards above, then reply with your EOD summary.'
+  });
 }
 
 /**
@@ -656,7 +781,10 @@ function processEodBackground(e) {
           props.deleteProperty(key);
         } catch (err) {
           console.error('Error processing background EOD (' + key + '):', err.message);
-          // We delete it anyway so it doesn't infinitely loop and crash the script quota
+          // Notify user their EOD failed, then delete to prevent infinite loop
+          try {
+            sendDirectMessage(payload.email, '⚠️ There was an error processing your EOD report. Please try resending it.');
+          } catch (e2) { /* best effort notification */ }
           props.deleteProperty(key);
         }
       }
@@ -1508,14 +1636,9 @@ function triggerEodSummary() {
   if (today.getDay() === 5) return;
 
   _postEodSummary();
-}
 
-/**
- * 5:15 PM - ClickUp Daily Snapshot
- */
-function triggerClickUpSnapshot() {
-  if (!isEodWorkday()) return;
-  dailyClickUpSnapshot();
+  // ClickUp snapshot merged here to save triggers (was separate triggerClickUpSnapshot at 5:15 PM)
+  try { dailyClickUpSnapshot(); } catch (e) { console.error('ClickUp snapshot failed:', e.message); }
 }
 
 /**
@@ -1626,6 +1749,9 @@ function triggerEodSummaryFriday() {
 
   console.log('Posting Friday EOD summary...');
   _postEodSummary();
+
+  // ClickUp snapshot merged here (was separate triggerClickUpSnapshot)
+  try { dailyClickUpSnapshot(); } catch (e) { console.error('ClickUp snapshot failed:', e.message); }
 }
 
 /**
@@ -1670,6 +1796,8 @@ function triggerWeeklyAdoptionReport() {
   if (!isWorkday()) return;
 
   safeExecute('Weekly Adoption Report', function () {
+    // Gamification merged here (was separate triggerWeeklyGamification at 10:15 AM)
+    try { postWeeklyGamification(); } catch (e) { console.error('Weekly gamification failed:', e.message); }
     computeDailyAdoptionMetrics(); // compute Friday's metrics first
     generateWeeklyAdoptionReport();
   });
