@@ -588,7 +588,7 @@ function sendRepeatDelayAlert(userEmail, taskId, taskName, delayCount) {
  */
 function handleOdooTaskAction(taskId, taskName, actionType, listId, event) {
   var numericId = parseInt(taskId, 10);
-  var userEmail = event.user.email;
+  var userEmail = (event.user && event.user.email) || 'unknown';
 
   if (actionType === 'COMPLETE') {
     // Find the "Done" stage for this task's project
@@ -805,6 +805,213 @@ function handleCompleteWithHours(event) {
     actionResponse: { type: 'UPDATE_MESSAGE' },
     text: responseText
   });
+}
+
+/**
+ * Categorize tasks into groups and get completed count
+ * @param {Array} tasks - Tasks from getTasksForUser
+ * @param {string} email - User email for BigQuery lookup
+ * @returns {object} { overdue, inProgress, dueTodayNotStarted, completedCount, summary }
+ */
+function categorizeTasks(tasks, email) {
+  var todayActions = [];
+  try {
+    todayActions = getTodayTaskActions(email);
+  } catch (e) {
+    console.error('categorizeTasks: getTodayTaskActions failed:', e.message);
+  }
+  var completedCount = todayActions.filter(function(a) { return a.action_type === 'COMPLETE'; }).length;
+
+  var overdue = tasks.filter(function(t) { return t.isOverdue && t.statusType !== 'closed'; });
+  var inProgress = tasks.filter(function(t) {
+    return !t.isOverdue && t.statusType !== 'closed' &&
+      (t.statusType === 'active' || (t.status && t.status.toLowerCase().indexOf('in progress') !== -1));
+  });
+  var dueTodayNotStarted = tasks.filter(function(t) {
+    return !t.isOverdue && t.statusType !== 'closed' && t.statusType !== 'active' &&
+      !(t.status && t.status.toLowerCase().indexOf('in progress') !== -1);
+  });
+
+  return {
+    overdue: overdue,
+    inProgress: inProgress,
+    dueTodayNotStarted: dueTodayNotStarted,
+    completedCount: completedCount,
+    summary: {
+      overdue: overdue.length,
+      inProgress: inProgress.length,
+      dueToday: dueTodayNotStarted.length,
+      completed: completedCount
+    }
+  };
+}
+
+/**
+ * Build morning check-in button card
+ * @param {string} userName - Display name
+ * @param {object} taskSummary - { dueToday, inProgress, overdue } counts
+ * @returns {object} cardsV2 array with single check-in card
+ */
+function buildCheckInCard(userName, taskSummary) {
+  var greeting = 'Good morning' + (userName ? ', ' + userName : '') + '!';
+  var summaryParts = [];
+  if (taskSummary.overdue > 0) summaryParts.push('⚠️ ' + taskSummary.overdue + ' overdue');
+  if (taskSummary.inProgress > 0) summaryParts.push('🔄 ' + taskSummary.inProgress + ' in progress');
+  if (taskSummary.dueToday > 0) summaryParts.push('📋 ' + taskSummary.dueToday + ' due today');
+  var summaryText = summaryParts.length > 0 ? summaryParts.join(' | ') : 'No tasks due today';
+
+  return [{
+    cardId: 'checkin_card',
+    card: {
+      header: {
+        title: greeting,
+        subtitle: 'Daily Check-In'
+      },
+      sections: [
+        {
+          widgets: [
+            {
+              decoratedText: {
+                text: summaryText,
+                startIcon: { knownIcon: 'DESCRIPTION' }
+              }
+            },
+            {
+              decoratedText: {
+                text: 'Click below to confirm you\'re online and see your tasks.',
+                wrapText: true
+              }
+            },
+            {
+              buttonList: {
+                buttons: [
+                  {
+                    text: '✅ Check In',
+                    onClick: {
+                      action: {
+                        function: 'handleCheckIn',
+                        parameters: []
+                      }
+                    },
+                    color: {
+                      red: 0.15,
+                      green: 0.47,
+                      blue: 0.93,
+                      alpha: 1
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }];
+}
+
+/**
+ * Build EOD start button card
+ * @param {string} lateNote - Late check-in note (or empty string)
+ * @param {string} complianceWarning - Compliance warning (or empty string)
+ * @param {object} taskSummary - { dueToday, inProgress, overdue, completed } counts
+ * @param {object|null} workspaceStats - Workspace activity stats
+ * @returns {object} cardsV2 array with single start-EOD card
+ */
+function buildStartEodCard(lateNote, complianceWarning, taskSummary, workspaceStats) {
+  var widgets = [];
+
+  // Late note
+  if (lateNote) {
+    widgets.push({
+      decoratedText: {
+        text: lateNote,
+        wrapText: true,
+        startIcon: { knownIcon: 'CLOCK' }
+      }
+    });
+  }
+
+  // Compliance warning
+  if (complianceWarning) {
+    widgets.push({
+      decoratedText: {
+        text: complianceWarning,
+        wrapText: true,
+        startIcon: { knownIcon: 'BOOKMARK' }
+      }
+    });
+  }
+
+  // Task summary
+  var summaryParts = [];
+  if (taskSummary.completed > 0) summaryParts.push('✅ ' + taskSummary.completed + ' completed');
+  if (taskSummary.overdue > 0) summaryParts.push('⚠️ ' + taskSummary.overdue + ' overdue');
+  if (taskSummary.inProgress > 0) summaryParts.push('🔄 ' + taskSummary.inProgress + ' in progress');
+  if (taskSummary.dueToday > 0) summaryParts.push('📋 ' + taskSummary.dueToday + ' due today');
+  var summaryText = summaryParts.length > 0 ? summaryParts.join(' | ') : 'No tasks due today';
+
+  widgets.push({
+    decoratedText: {
+      text: summaryText,
+      wrapText: true,
+      startIcon: { knownIcon: 'DESCRIPTION' }
+    }
+  });
+
+  // Workspace stats
+  if (workspaceStats) {
+    var statsText = formatWorkspaceStatsBlock(workspaceStats);
+    if (statsText) {
+      widgets.push({
+        decoratedText: {
+          text: statsText,
+          wrapText: true
+        }
+      });
+    }
+  }
+
+  // Instruction + button
+  widgets.push({
+    decoratedText: {
+      text: 'Click below to load your task cards and start your EOD report.',
+      wrapText: true
+    }
+  });
+
+  widgets.push({
+    buttonList: {
+      buttons: [
+        {
+          text: '📝 Start EOD',
+          onClick: {
+            action: {
+              function: 'handleStartEod',
+              parameters: []
+            }
+          },
+          color: {
+            red: 0.15,
+            green: 0.47,
+            blue: 0.93,
+            alpha: 1
+          }
+        }
+      ]
+    }
+  });
+
+  return [{
+    cardId: 'start_eod_card',
+    card: {
+      header: {
+        title: 'Time for your EOD Report!',
+        subtitle: 'End of Day'
+      },
+      sections: [{ widgets: widgets }]
+    }
+  }];
 }
 
 // formatDelayReason is defined in Chat.js (BUG #13 fix - removed duplicate)
