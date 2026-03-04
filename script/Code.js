@@ -324,7 +324,7 @@ function onMessage(event) {
         var testLateMin = getLateMinutesForUser(sender.email);
         var testLateNote = testLateMin > 0 ? 'You checked in ' + testLateMin + ' minutes late this morning.' : '';
 
-        var testEodCards = buildStartEodCard(testLateNote, '', eodTestCat.summary, null);
+        var testEodCards = buildStartEodCard(testLateNote, '', eodTestCat.summary);
         sendDirectMessage(sender.email, '', testEodCards);
 
         return createChatResponse('EOD test started. Check above for your Start EOD card.');
@@ -597,12 +597,27 @@ function handleCheckInResponse(email, name, text) {
  * Logs attendance, fetches tasks, sends interactive task cards
  */
 function handleCheckInButton(event) {
-  var user = event.user || (event.chat && event.chat.user) || {};
+  var user = event.chat ? event.chat.user : (event.user || {});
   var email = user.email;
-  var name = user.displayName || (email ? email.split('@')[0] : 'Unknown');
+  var name = user.displayName || (email ? email.split('@')[0] : 'there');
 
   if (!email) {
     return createChatResponse('Error: Could not determine your email.');
+  }
+
+  // Double-click protection: check if already checked in today
+  try {
+    var todayCheckIns = getTodayCheckIns();
+    var alreadyCheckedIn = todayCheckIns.some(function(c) { return c.user_email === email; });
+    if (alreadyCheckedIn) {
+      return createChatResponse({
+        actionResponse: { type: 'UPDATE_MESSAGE' },
+        text: '✅ You\'ve already checked in today.'
+      });
+    }
+  } catch (e) {
+    console.error('handleCheckInButton: dedup check failed:', e.message);
+    // Continue anyway — better to allow a duplicate than block a check-in
   }
 
   // Log attendance
@@ -666,12 +681,21 @@ function handleCheckInButton(event) {
  * Fetches tasks, sends interactive task cards + EOD format guide, sets AWAITING_EOD
  */
 function handleStartEodButton(event) {
-  var user = event.user || (event.chat && event.chat.user) || {};
+  var user = event.chat ? event.chat.user : (event.user || {});
   var email = user.email;
-  var name = user.displayName || (email ? email.split('@')[0] : 'Unknown');
+  var name = user.displayName || (email ? email.split('@')[0] : 'there');
 
   if (!email) {
     return createChatResponse('Error: Could not determine your email.');
+  }
+
+  // Double-click protection: if already in AWAITING_EOD, don't re-send
+  var currentState = getUserState(email);
+  if (currentState === 'AWAITING_EOD') {
+    return createChatResponse({
+      actionResponse: { type: 'UPDATE_MESSAGE' },
+      text: '📝 EOD already started. Update your task cards above and reply with your summary.'
+    });
   }
 
   // Fetch tasks (fresh pull)

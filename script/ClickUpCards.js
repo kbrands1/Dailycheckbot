@@ -890,14 +890,10 @@ function buildCheckInCard(userName, taskSummary) {
                     onClick: {
                       action: {
                         function: 'handleCheckIn',
-                        parameters: []
+                        parameters: [
+                          { key: 'action', value: 'checkin' }
+                        ]
                       }
-                    },
-                    color: {
-                      red: 0.15,
-                      green: 0.47,
-                      blue: 0.93,
-                      alpha: 1
                     }
                   }
                 ]
@@ -915,10 +911,9 @@ function buildCheckInCard(userName, taskSummary) {
  * @param {string} lateNote - Late check-in note (or empty string)
  * @param {string} complianceWarning - Compliance warning (or empty string)
  * @param {object} taskSummary - { dueToday, inProgress, overdue, completed } counts
- * @param {object|null} workspaceStats - Workspace activity stats
  * @returns {object} cardsV2 array with single start-EOD card
  */
-function buildStartEodCard(lateNote, complianceWarning, taskSummary, workspaceStats) {
+function buildStartEodCard(lateNote, complianceWarning, taskSummary) {
   var widgets = [];
 
   // Late note
@@ -959,19 +954,6 @@ function buildStartEodCard(lateNote, complianceWarning, taskSummary, workspaceSt
     }
   });
 
-  // Workspace stats
-  if (workspaceStats) {
-    var statsText = formatWorkspaceStatsBlock(workspaceStats);
-    if (statsText) {
-      widgets.push({
-        decoratedText: {
-          text: statsText,
-          wrapText: true
-        }
-      });
-    }
-  }
-
   // Instruction + button
   widgets.push({
     decoratedText: {
@@ -988,14 +970,10 @@ function buildStartEodCard(lateNote, complianceWarning, taskSummary, workspaceSt
           onClick: {
             action: {
               function: 'handleStartEod',
-              parameters: []
+              parameters: [
+                { key: 'action', value: 'start_eod' }
+              ]
             }
-          },
-          color: {
-            red: 0.15,
-            green: 0.47,
-            blue: 0.93,
-            alpha: 1
           }
         }
       ]
