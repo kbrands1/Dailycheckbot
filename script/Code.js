@@ -309,51 +309,25 @@ function onMessage(event) {
     // Test commands (for development) — single-word to avoid matching issues
     if (lowerText === 'runeod') {
       try {
-        var config = getConfig();
-        var eodTasks = [];
+        var eodConfig = getConfig();
+        var eodTestTasks = [];
         try {
-          if (config.clickup_config && config.clickup_config.enabled) {
-            eodTasks = getTasksForUser(sender.email, 'today');
+          if (eodConfig.clickup_config && eodConfig.clickup_config.enabled) {
+            eodTestTasks = getTasksForUser(sender.email, 'today');
           }
         } catch (taskErr) {
           console.error('runeod: ClickUp task fetch failed:', taskErr.message);
         }
 
-        var lateMin = getLateMinutesForUser(sender.email);
-        var workspaceStats = null;
-        try {
-          if (typeof getUserWorkspaceStats === 'function') {
-            workspaceStats = getUserWorkspaceStats(sender.email);
-          }
-        } catch (wsErr) {
-          console.error('runeod: Workspace stats failed:', wsErr.message);
-        }
+        var eodTestCat = categorizeTasks(eodTestTasks, sender.email);
 
-        var complianceWarning = null; // Test does not increment compliance strike
+        var testLateMin = getLateMinutesForUser(sender.email);
+        var testLateNote = testLateMin > 0 ? 'You checked in ' + testLateMin + ' minutes late this morning.' : '';
 
-        var eodMessage = getEodRequestMessage(
-          { email: sender.email, name: sender.displayName },
-          eodTasks,
-          lateMin,
-          workspaceStats,
-          complianceWarning
-        );
+        var testEodCards = buildStartEodCard(testLateNote, '', eodTestCat.summary, null);
+        sendDirectMessage(sender.email, '', testEodCards);
 
-        // Send via REST API so tasks/cards are included
-        if (eodMessage.cardsV2) {
-          sendDirectMessage(sender.email, eodMessage.text, eodMessage.cardsV2);
-          if (eodMessage.followUpText) {
-            sendDirectMessage(sender.email, eodMessage.followUpText);
-          }
-        } else {
-          sendDirectMessage(sender.email, eodMessage.text);
-        }
-
-        // Set state so the next reply is treated as EOD submission
-        setUserState(sender.email, 'AWAITING_EOD');
-        clearEodRetryCount(sender.email);
-
-        return createChatResponse('EOD test started. Check above for your EOD prompt with tasks.');
+        return createChatResponse('EOD test started. Check above for your Start EOD card.');
       } catch (eodErr) {
         console.error('runeod error:', eodErr.message, eodErr.stack);
         return createChatResponse('Error running EOD test: ' + eodErr.message);
@@ -362,11 +336,17 @@ function onMessage(event) {
 
     if (lowerText === 'runcheckin') {
       try {
-        var ciTasks = getTasksForUser(sender.email, 'today');
-        var ciMsg = getMorningCheckInMessage({ email: sender.email, name: sender.displayName }, ciTasks, false);
-        return createChatResponse(ciMsg);
+        var ciConfig = getConfig();
+        var ciTasks = [];
+        if (ciConfig.clickup_config && ciConfig.clickup_config.enabled) {
+          ciTasks = getTasksForUser(sender.email, 'today');
+        }
+        var ciCat = categorizeTasks(ciTasks, sender.email);
+        var ciCards = buildCheckInCard(sender.displayName || sender.email.split('@')[0], ciCat.summary);
+        sendDirectMessage(sender.email, '', ciCards);
+        return createChatResponse('Check-in test started. Check above for your check-in card.');
       } catch (ciErr) {
-        console.error('runcheckin error:', ciErr.message);
+        console.error('runcheckin error:', ciErr.message, ciErr.stack);
         return createChatResponse('Error: ' + ciErr.message);
       }
     }
