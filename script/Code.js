@@ -307,6 +307,7 @@ function onMessage(event) {
     }
 
     // Test commands (for development) — single-word to avoid matching issues
+    // Return cards directly via createChatResponse (no REST API call to avoid 30s timeout)
     if (lowerText === 'runeod') {
       try {
         var eodConfig = getConfig();
@@ -319,15 +320,19 @@ function onMessage(event) {
           console.error('runeod: ClickUp task fetch failed:', taskErr.message);
         }
 
-        var eodTestCat = categorizeTasks(eodTestTasks, sender.email);
+        // Build summary from tasks directly (skip BigQuery to stay under 30s)
+        var eodTestSummary = {
+          overdue: eodTestTasks.filter(function(t) { return t.isOverdue && t.statusType !== 'closed'; }).length,
+          inProgress: eodTestTasks.filter(function(t) { return !t.isOverdue && t.statusType === 'active'; }).length,
+          dueToday: eodTestTasks.filter(function(t) { return !t.isOverdue && t.statusType !== 'closed' && t.statusType !== 'active'; }).length,
+          completed: 0
+        };
 
         var testLateMin = getLateMinutesForUser(sender.email);
         var testLateNote = testLateMin > 0 ? 'You checked in ' + testLateMin + ' minutes late this morning.' : '';
 
-        var testEodCards = buildStartEodCard(testLateNote, '', eodTestCat.summary);
-        sendDirectMessage(sender.email, '', testEodCards);
-
-        return createChatResponse('EOD test started. Check above for your Start EOD card.');
+        var testEodCards = buildStartEodCard(testLateNote, '', eodTestSummary);
+        return createChatResponse({ cardsV2: testEodCards });
       } catch (eodErr) {
         console.error('runeod error:', eodErr.message, eodErr.stack);
         return createChatResponse('Error running EOD test: ' + eodErr.message);
@@ -338,13 +343,22 @@ function onMessage(event) {
       try {
         var ciConfig = getConfig();
         var ciTasks = [];
-        if (ciConfig.clickup_config && ciConfig.clickup_config.enabled) {
-          ciTasks = getTasksForUser(sender.email, 'today');
+        try {
+          if (ciConfig.clickup_config && ciConfig.clickup_config.enabled) {
+            ciTasks = getTasksForUser(sender.email, 'today');
+          }
+        } catch (taskErr) {
+          console.error('runcheckin: ClickUp task fetch failed:', taskErr.message);
         }
-        var ciCat = categorizeTasks(ciTasks, sender.email);
-        var ciCards = buildCheckInCard(sender.displayName || sender.email.split('@')[0], ciCat.summary);
-        sendDirectMessage(sender.email, '', ciCards);
-        return createChatResponse('Check-in test started. Check above for your check-in card.');
+
+        // Build summary from tasks directly (skip BigQuery to stay under 30s)
+        var ciSummary = {
+          overdue: ciTasks.filter(function(t) { return t.isOverdue && t.statusType !== 'closed'; }).length,
+          inProgress: ciTasks.filter(function(t) { return !t.isOverdue && t.statusType === 'active'; }).length,
+          dueToday: ciTasks.filter(function(t) { return !t.isOverdue && t.statusType !== 'closed' && t.statusType !== 'active'; }).length
+        };
+        var ciCards = buildCheckInCard(sender.displayName || sender.email.split('@')[0], ciSummary);
+        return createChatResponse({ cardsV2: ciCards });
       } catch (ciErr) {
         console.error('runcheckin error:', ciErr.message, ciErr.stack);
         return createChatResponse('Error: ' + ciErr.message);
