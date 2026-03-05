@@ -1178,6 +1178,8 @@ function _sendMorningCheckIns(isMonday) {
   var config = getConfig();
   var splitSpecialActive = hasActiveSplitSpecialPeriod();
 
+  console.log('Morning check-in: ' + teamMembers.length + ' working employees, splitSpecialActive=' + splitSpecialActive);
+
   // Filter to tracked users on default schedule (dispatcher handles custom/split)
   var defaultMembers = teamMembers.filter(function (m) {
     var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
@@ -1186,6 +1188,8 @@ function _sendMorningCheckIns(isMonday) {
     if (splitSpecialActive) return false; // Dispatcher handles everyone during split special periods
     return !fullMember.custom_start_time; // Skip custom-schedule users (dispatcher handles them)
   });
+
+  console.log('Morning check-in: ' + defaultMembers.length + ' default members after filtering (splitSpecial=' + splitSpecialActive + ')');
 
   // Post Monday kickoff if applicable (uses all working employees for team-wide message)
   if (isMonday) {
@@ -1225,13 +1229,16 @@ function _sendMorningCheckIns(isMonday) {
           : getTasksForUser(member.email, 'today');
       }
 
-      // Send button card instead of text
-      var cat = categorizeTasks(tasks, member.email);
+      // Send button card — skip BQ query at morning (no completions yet, saves ~2s per user)
+      var cat = categorizeTasks(tasks, member.email, true);
       var checkInCards = buildCheckInCard(
         member.name || member.email.split('@')[0],
         cat.summary
       );
-      sendDirectMessage(member.email, '', checkInCards);
+      var ciResult = sendDirectMessage(member.email, '👋 Good morning! Click below to check in.', checkInCards);
+      if (!ciResult || !ciResult.sent) {
+        console.error('Morning check-in FAILED for ' + member.email + ': ' + (ciResult ? ciResult.error : 'no DM space'));
+      }
       logPromptSent(member.email, 'CHECKIN');
       // No AWAITING_CHECKIN state — button handler handles check-in
     } catch (err) {
@@ -1279,7 +1286,7 @@ function _sendCheckInFollowUps() {
       } catch (ftErr) {
         console.error('Follow-up task fetch failed for ' + notCheckedIn[j].email + ':', ftErr.message);
       }
-      var followUpCat = categorizeTasks(followUpTasks, notCheckedIn[j].email);
+      var followUpCat = categorizeTasks(followUpTasks, notCheckedIn[j].email, true);
       var followUpCards = buildCheckInCard(
         notCheckedIn[j].name || notCheckedIn[j].email.split('@')[0],
         followUpCat.summary
@@ -2052,6 +2059,8 @@ function triggerScheduleDispatcher() {
   var workingEmployees = getCachedWorkingEmployees();
   var splitSpecialActive = hasActiveSplitSpecialPeriod();
 
+  console.log('Dispatcher: ' + workingEmployees.length + ' working, splitSpecial=' + splitSpecialActive);
+
   // Determine which users the dispatcher should handle
   var dispatchUsers = workingEmployees.filter(function (m) {
     var fullMember = config.team_members.find(function (tm) { return tm.email === m.email; });
@@ -2062,6 +2071,8 @@ function triggerScheduleDispatcher() {
     // Otherwise only custom-schedule users
     return !!fullMember.custom_start_time;
   });
+
+  console.log('Dispatcher: ' + dispatchUsers.length + ' dispatch users');
 
   if (dispatchUsers.length === 0) return;
 
@@ -2117,14 +2128,15 @@ function triggerScheduleDispatcher() {
 
 /**
  * Check if NOW is the right time to send a prompt to this user.
- * Uses a 15-minute window after the target time.
+ * Uses a 29-minute window to match dispatcher's 30-min interval + GAS trigger jitter.
+ * Dedup cache prevents double-sends within the window.
  */
 function isTimeForPrompt(email, promptType) {
   var schedule = getUserWorkSchedule(email);
   // Fixed Issue 5, 9, 10: Use exact local time to avoid UTC mismatch in trigger environment
   var localTimeStr = Utilities.formatDate(new Date(), 'America/Chicago', 'HH:mm');
   var nowMinutes = timeToMinutes(localTimeStr);
-  var WINDOW = 15;
+  var WINDOW = 29;
 
   var block1Start = timeToMinutes(schedule.blocks[0].start);
   var lastBlockEnd = timeToMinutes(schedule.blocks[schedule.blocks.length - 1].end);
@@ -2158,16 +2170,16 @@ function dispatchPrompt(member, promptType, config, todayCheckIns, todayEods) {
         break; // Already checked in organically
       }
       var tasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
-      var dispCiCat = categorizeTasks(tasks, member.email);
+      var dispCiCat = categorizeTasks(tasks, member.email, true);
       var dispCiCards = buildCheckInCard(member.name || member.email.split('@')[0], dispCiCat.summary);
-      sendDirectMessage(member.email, '', dispCiCards);
+      sendDirectMessage(member.email, '👋 Good morning! Click below to check in.', dispCiCards);
       logPromptSent(member.email, 'CHECKIN');
       // No AWAITING_CHECKIN state — button click handles it
       break;
     case 'CHECKIN_FOLLOWUP':
       if (!todayCheckIns || !todayCheckIns.some(function (c) { return c.user_email === member.email; })) {
         var dispFollowTasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
-        var dispFollowCat = categorizeTasks(dispFollowTasks, member.email);
+        var dispFollowCat = categorizeTasks(dispFollowTasks, member.email, true);
         var dispFollowCards = buildCheckInCard(member.name || member.email.split('@')[0], dispFollowCat.summary);
         sendDirectMessage(member.email, '⏰ *Reminder:* Please check in.', dispFollowCards);
         logPromptSent(member.email, 'CHECKIN_FOLLOWUP');

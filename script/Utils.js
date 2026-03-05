@@ -70,8 +70,8 @@ function createScheduledTriggers() {
   // 10:30 AM Friday - Weekly Adoption Report + Gamification (merged to save triggers)
   ScriptApp.newTrigger('triggerWeeklyAdoptionReport').timeBased().atHour(10).nearMinute(30).everyDays(1).inTimezone('America/Chicago').create();
 
-  // Every 30 minutes - Schedule Dispatcher for custom/split-shift users
-  ScriptApp.newTrigger('triggerScheduleDispatcher').timeBased().everyMinutes(30).inTimezone('America/Chicago').create();
+  // Every 5 minutes - Schedule Dispatcher for custom/split-shift users (was 30m, caused delays during Ramadan)
+  ScriptApp.newTrigger('triggerScheduleDispatcher').timeBased().everyMinutes(5).inTimezone('America/Chicago').create();
 
   // Every 1 minute - Background processor for EOD reports and card queues
   ScriptApp.newTrigger('processEodBackground').timeBased().everyMinutes(1).create();

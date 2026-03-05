@@ -673,23 +673,54 @@ function addTimeEntry(taskId, durationMs, userName, userEmail) {
  */
 function getTodayTimeEntries(googleEmail) {
   var teamId = getTeamId();
-  if (!teamId) return null;
+  if (!teamId) { console.warn('getTodayTimeEntries: no teamId'); return null; }
 
   var clickUpUserId = getClickUpUserId(googleEmail);
-  if (!clickUpUserId) return null;
+  if (!clickUpUserId) { console.warn('getTodayTimeEntries: no ClickUp user for ' + googleEmail); return null; }
 
   var now = new Date();
-  var startOfDay = new Date(now);
-  startOfDay.setHours(0, 0, 0, 0);
+  // Use Chicago midnight, not server (UTC) midnight
+  var todayStr = Utilities.formatDate(now, 'America/Chicago', 'yyyy-MM-dd');
+  var startOfDayChicago = new Date(todayStr + 'T00:00:00');
+  // Adjust for Chicago offset (CST=-6, CDT=-5)
+  var chicagoOffset = parseInt(Utilities.formatDate(now, 'America/Chicago', 'Z').replace('+', ''));
+  var utcOffset = now.getTimezoneOffset(); // GAS server offset in minutes
+  var startMs = now.getTime() - (now.getTime() % 86400000); // UTC midnight
+  // Simpler: just calculate Chicago midnight in UTC
+  var chicagoHour = parseInt(Utilities.formatDate(now, 'America/Chicago', 'HH'));
+  var chicagoMin = parseInt(Utilities.formatDate(now, 'America/Chicago', 'mm'));
+  var elapsedTodayMs = (chicagoHour * 3600 + chicagoMin * 60) * 1000;
+  var chicagoMidnightUtcMs = now.getTime() - elapsedTodayMs;
 
+  // First try: with assignee filter
   var endpoint = '/team/' + teamId + '/time_entries?' +
-    'start_date=' + startOfDay.getTime() + '&' +
+    'start_date=' + chicagoMidnightUtcMs + '&' +
     'end_date=' + now.getTime() + '&' +
     'assignee=' + clickUpUserId;
 
   try {
     var result = clickUpRequest(endpoint);
-    if (!result || !result.data) return { totalHours: 0, entries: [] };
+    console.log('getTodayTimeEntries for ' + googleEmail + ' (CU user ' + clickUpUserId + '): ' +
+      (result && result.data ? result.data.length : 0) + ' entries found');
+
+    // If no results with assignee filter, try without (API might not filter correctly)
+    if ((!result || !result.data || result.data.length === 0)) {
+      var endpointAll = '/team/' + teamId + '/time_entries?' +
+        'start_date=' + chicagoMidnightUtcMs + '&' +
+        'end_date=' + now.getTime();
+      var resultAll = clickUpRequest(endpointAll);
+      if (resultAll && resultAll.data && resultAll.data.length > 0) {
+        // Filter locally by user ID
+        result = {
+          data: resultAll.data.filter(function (e) {
+            return e.user && String(e.user.id) === String(clickUpUserId);
+          })
+        };
+        console.log('getTodayTimeEntries fallback for ' + googleEmail + ': ' + result.data.length + ' entries after local filter (from ' + resultAll.data.length + ' total)');
+      }
+    }
+
+    if (!result || !result.data || result.data.length === 0) return { totalHours: 0, entries: [] };
 
     var entries = result.data.map(function (entry) {
       return {

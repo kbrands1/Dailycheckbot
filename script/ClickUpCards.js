@@ -387,8 +387,10 @@ function handleTaskAction(event) {
 
   switch (action) {
     case 'COMPLETE':
-      // Show hours input card instead of immediately completing
-      var hoursCard = buildCompleteWithHoursCard(taskId, listId, taskName);
+      // Show hours input card — skip hours field if time already tracked in ClickUp
+      var alreadyTrackedMs = task && task.time_spent ? parseInt(task.time_spent) : 0;
+      var alreadyTrackedHrs = alreadyTrackedMs > 0 ? Math.round(alreadyTrackedMs / 3600000 * 100) / 100 : 0;
+      var hoursCard = buildCompleteWithHoursCard(taskId, listId, taskName, alreadyTrackedHrs);
       return createChatResponse({
         actionResponse: { type: 'UPDATE_MESSAGE' },
         cardsV2: [hoursCard]
@@ -665,8 +667,88 @@ function _extractFormInput(event, fieldName) {
 
 /**
  * Build card asking for hours spent on a completed task
+ * @param {number} alreadyTrackedHrs - Hours already tracked in ClickUp (0 if none)
  */
-function buildCompleteWithHoursCard(taskId, listId, taskName) {
+function buildCompleteWithHoursCard(taskId, listId, taskName, alreadyTrackedHrs) {
+  var widgets = [];
+  var skipHoursDefault = false;
+
+  if (alreadyTrackedHrs > 0) {
+    // Time already tracked — show it and skip hours input
+    widgets.push({
+      textParagraph: {
+        text: '<b>⏱️ ' + alreadyTrackedHrs + 'h already tracked in ClickUp</b>\nJust add your outcome below.'
+      }
+    });
+    skipHoursDefault = true;
+  } else {
+    // No time tracked — ask for hours
+    widgets.push({
+      textParagraph: {
+        text: '<b>Fill in your task details:</b>'
+      }
+    });
+    widgets.push({
+      textInput: {
+        label: 'Hours spent',
+        type: 'SINGLE_LINE',
+        name: 'hoursSpent',
+        hintText: 'e.g. 2.5'
+      }
+    });
+  }
+
+  widgets.push({
+    textInput: {
+      label: 'Outcome — what was accomplished?',
+      type: 'MULTIPLE_LINE',
+      name: 'taskOutcome',
+      hintText: 'e.g. Resolved null pointer on payment form, deployed to staging'
+    }
+  });
+  widgets.push({
+    textInput: {
+      label: 'Deliverable link (optional)',
+      type: 'SINGLE_LINE',
+      name: 'deliverableLink',
+      hintText: 'e.g. Drive/Figma/Sheet link (leave blank if N/A)'
+    }
+  });
+  widgets.push({
+    buttonList: {
+      buttons: [
+        {
+          text: '✅ Complete',
+          onClick: {
+            action: {
+              function: 'handleCompleteWithHours',
+              parameters: [
+                { key: 'taskId', value: taskId },
+                { key: 'listId', value: listId },
+                { key: 'taskName', value: taskName },
+                { key: 'skipHours', value: skipHoursDefault ? 'true' : 'false' }
+              ]
+            }
+          }
+        },
+        {
+          text: '⏭️ Skip details',
+          onClick: {
+            action: {
+              function: 'handleCompleteWithHours',
+              parameters: [
+                { key: 'taskId', value: taskId },
+                { key: 'listId', value: listId },
+                { key: 'taskName', value: taskName },
+                { key: 'skipHours', value: 'true' }
+              ]
+            }
+          }
+        }
+      ]
+    }
+  });
+
   return {
     cardId: 'complete_hours_' + taskId,
     card: {
@@ -676,70 +758,7 @@ function buildCompleteWithHoursCard(taskId, listId, taskName) {
       },
       sections: [
         {
-          widgets: [
-            {
-              textParagraph: {
-                text: '<b>Fill in your task details:</b>'
-              }
-            },
-            {
-              textInput: {
-                label: 'Hours spent',
-                type: 'SINGLE_LINE',
-                name: 'hoursSpent',
-                hintText: 'e.g. 2.5'
-              }
-            },
-            {
-              textInput: {
-                label: 'Outcome — what was accomplished?',
-                type: 'MULTIPLE_LINE',
-                name: 'taskOutcome',
-                hintText: 'e.g. Resolved null pointer on payment form, deployed to staging'
-              }
-            },
-            {
-              textInput: {
-                label: 'Deliverable link (optional)',
-                type: 'SINGLE_LINE',
-                name: 'deliverableLink',
-                hintText: 'e.g. Drive/Figma/Sheet link (leave blank if N/A)'
-              }
-            },
-            {
-              buttonList: {
-                buttons: [
-                  {
-                    text: '✅ Complete',
-                    onClick: {
-                      action: {
-                        function: 'handleCompleteWithHours',
-                        parameters: [
-                          { key: 'taskId', value: taskId },
-                          { key: 'listId', value: listId },
-                          { key: 'taskName', value: taskName }
-                        ]
-                      }
-                    }
-                  },
-                  {
-                    text: '⏭️ Skip details',
-                    onClick: {
-                      action: {
-                        function: 'handleCompleteWithHours',
-                        parameters: [
-                          { key: 'taskId', value: taskId },
-                          { key: 'listId', value: listId },
-                          { key: 'taskName', value: taskName },
-                          { key: 'skipHours', value: 'true' }
-                        ]
-                      }
-                    }
-                  }
-                ]
-              }
-            }
-          ]
+          widgets: widgets
         }
       ]
     }
@@ -818,14 +837,16 @@ function handleCompleteWithHours(event) {
  * @param {string} email - User email for BigQuery lookup
  * @returns {object} { overdue, inProgress, dueTodayNotStarted, completedCount, summary }
  */
-function categorizeTasks(tasks, email) {
-  var todayActions = [];
-  try {
-    todayActions = getTodayTaskActions(email);
-  } catch (e) {
-    console.error('categorizeTasks: getTodayTaskActions failed:', e.message);
+function categorizeTasks(tasks, email, skipBqQuery) {
+  var completedCount = 0;
+  if (!skipBqQuery) {
+    try {
+      var todayActions = getTodayTaskActions(email);
+      completedCount = todayActions.filter(function(a) { return a.action_type === 'COMPLETE'; }).length;
+    } catch (e) {
+      console.error('categorizeTasks: getTodayTaskActions failed:', e.message);
+    }
   }
-  var completedCount = todayActions.filter(function(a) { return a.action_type === 'COMPLETE'; }).length;
 
   var overdue = tasks.filter(function(t) { return t.isOverdue && t.statusType !== 'closed'; });
   var inProgress = tasks.filter(function(t) {
