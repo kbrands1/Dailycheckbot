@@ -220,7 +220,7 @@ function updateMessage(messageName, text, cards) {
     var updateMask = 'text';
 
     if (isServiceAccountConfigured()) {
-      accessToken = getServiceAccountToken();
+      accessToken = getServiceAccountToken('https://www.googleapis.com/auth/chat.bot');
     }
     if (!accessToken) {
       accessToken = ScriptApp.getOAuthToken();
@@ -372,23 +372,30 @@ function postEodSummary(submitted, missing, taskStats, perPersonCompletions, tod
 
   // Add task completion stats
   if (taskStats) {
+    var ts = {
+      completed: taskStats.completed || 0,
+      delayed: taskStats.delayed || 0,
+      stillOverdue: taskStats.stillOverdue || 0,
+      delayReasons: taskStats.delayReasons || {},
+      newlyOverdue: taskStats.newlyOverdue || []
+    };
     message += `\n──────────────────────────────\n\n`;
     message += `📋 **Task Completion Today**\n\n`;
-    message += `✅ Completed: ${taskStats.completed} tasks\n`;
-    message += `➡️ Delayed to tomorrow: ${taskStats.delayed} tasks\n`;
-    message += `🔴 Still overdue: ${taskStats.stillOverdue} tasks\n`;
+    message += `✅ Completed: ${ts.completed} tasks\n`;
+    message += `➡️ Delayed to tomorrow: ${ts.delayed} tasks\n`;
+    message += `🔴 Still overdue: ${ts.stillOverdue} tasks\n`;
 
-    if (taskStats.delayReasons && Object.keys(taskStats.delayReasons).length > 0) {
+    if (Object.keys(ts.delayReasons).length > 0) {
       message += `\n**Delay Reasons:**\n`;
-      Object.entries(taskStats.delayReasons).forEach(([reason, count]) => {
+      Object.entries(ts.delayReasons).forEach(([reason, count]) => {
         message += `• ${formatDelayReason(reason)}: ${count}\n`;
       });
     }
 
-    if (taskStats.newlyOverdue && taskStats.newlyOverdue.length > 0) {
-      message += `\n**Newly Overdue Today:** ${taskStats.newlyOverdue.length} tasks\n`;
-      taskStats.newlyOverdue.slice(0, 3).forEach(t => {
-        message += `• ${t.userName}: ${t.taskName}\n`;
+    if (ts.newlyOverdue.length > 0) {
+      message += `\n**Newly Overdue Today:** ${ts.newlyOverdue.length} tasks\n`;
+      ts.newlyOverdue.slice(0, 3).forEach(t => {
+        message += `• ${t.userName || t.name || 'Unknown'}: ${t.taskName || t.task_name || 'Unknown'}\n`;
       });
     }
   }
@@ -492,73 +499,3 @@ function formatDelayReason(reason) {
   return labels[reason] || reason;
 }
 
-/**
- * Build a basic card
- */
-function buildCard(cardId, header, sections) {
-  return {
-    cardId: cardId,
-    card: {
-      header: header,
-      sections: sections
-    }
-  };
-}
-
-/**
- * Build header for card
- */
-function buildCardHeader(title, subtitle = null, imageUrl = null) {
-  const header = { title: title };
-  if (subtitle) header.subtitle = subtitle;
-  if (imageUrl) header.imageUrl = imageUrl;
-  return header;
-}
-
-/**
- * Build text widget
- */
-function buildTextWidget(text) {
-  return {
-    textParagraph: { text: text }
-  };
-}
-
-/**
- * Build decorated text widget
- */
-function buildDecoratedText(text, icon = null, topLabel = null) {
-  const widget = {
-    decoratedText: { text: text }
-  };
-  if (icon) widget.decoratedText.startIcon = { knownIcon: icon };
-  if (topLabel) widget.decoratedText.topLabel = topLabel;
-  return widget;
-}
-
-/**
- * Build button list widget
- */
-function buildButtonList(buttons) {
-  return {
-    buttonList: { buttons: buttons }
-  };
-}
-
-/**
- * Build a single button
- */
-function buildButton(text, actionFunction, parameters = {}) {
-  return {
-    text: text,
-    onClick: {
-      action: {
-        function: actionFunction,
-        parameters: Object.entries(parameters).map(([key, value]) => ({
-          key: key,
-          value: String(value)
-        }))
-      }
-    }
-  };
-}

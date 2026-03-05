@@ -775,7 +775,7 @@ function handleCompleteWithHours(event) {
     responseText = '✅ Marked complete: "' + taskName + '"';
     if (!skipHours && !isNaN(hours) && hours > 0 && hours <= 24) {
       var durationMs = Math.round(hours * 3600000);
-      var timeResult = addTimeEntry(taskId, durationMs, userName);
+      var timeResult = addTimeEntry(taskId, durationMs, userName, userEmail);
       if (timeResult) {
         responseText += '\n⏱️ Logged ' + hours + ' hours';
       } else {
@@ -794,12 +794,17 @@ function handleCompleteWithHours(event) {
     responseText = '❌ Error updating task. Please try again.';
   }
 
-  logTaskAction(userEmail, taskId, taskName, listId,
-    task && task.list ? task.list.name : '', 'COMPLETE',
-    oldStatus, newStatus,
-    oldDueDate ? Utilities.formatDate(oldDueDate, 'America/Chicago', 'yyyy-MM-dd') : null,
-    null, result ? 'SUCCESS' : 'FAILED', 'clickup',
-    outcome, deliverableLink);
+  try {
+    logTaskAction(userEmail, taskId, taskName, listId,
+      task && task.list ? task.list.name : '', 'COMPLETE',
+      oldStatus, newStatus,
+      oldDueDate ? Utilities.formatDate(oldDueDate, 'America/Chicago', 'yyyy-MM-dd') : null,
+      null, result ? 'SUCCESS' : 'FAILED', 'clickup',
+      outcome, deliverableLink);
+    console.log('handleCompleteWithHours: logTaskAction called for ' + userEmail + ' task=' + taskId + ' result=' + result);
+  } catch (logErr) {
+    console.error('handleCompleteWithHours: logTaskAction FAILED for ' + userEmail + ' task=' + taskId + ':', logErr.message);
+  }
 
   return createChatResponse({
     actionResponse: { type: 'UPDATE_MESSAGE' },

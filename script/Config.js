@@ -830,8 +830,9 @@ function computeTotalHours(blocks) {
  * Convert "HH:MM" string to minutes since midnight.
  */
 function timeToMinutes(timeStr) {
+  if (!timeStr || typeof timeStr !== 'string') return 0;
   var parts = timeStr.split(':');
-  return parseInt(parts[0]) * 60 + parseInt(parts[1]);
+  return parseInt(parts[0], 10) * 60 + parseInt(parts[1], 10);
 }
 
 /**

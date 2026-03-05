@@ -14,7 +14,7 @@ const TEST_MODE = false; // Set to true only for development testing
 
 /**
  * Set conversation state for a user
- * States: AWAITING_CHECKIN, AWAITING_EOD, IDLE
+ * States: AWAITING_EOD, IDLE
  * Uses PropertiesService for persistence across execution contexts
  */
 function setUserState(email, state) {
@@ -258,12 +258,17 @@ function onMessage(event) {
 
     console.log("User:", sender.displayName, "Text:", text);
 
+    // Ping FIRST — before any config/state reads to guarantee fast response
+    var lowerText = text.toLowerCase().trim();
+    if (lowerText === 'ping') {
+      return createChatResponse("🏓 Pong! Bot is working.");
+    }
+
     // Store DM space for future proactive messaging
     if (space.type === 'DM' && space.name && sender.email) {
       storeDMSpace(sender.email, space.name);
     }
 
-    var lowerText = text.toLowerCase().trim();
     var userState = getUserState(sender.email);
 
     // Weekend/after-hours guard: acknowledge but don't process as check-in/EOD
@@ -278,22 +283,18 @@ function onMessage(event) {
       return createChatResponse("👋 Hi " + (sender.displayName || "there") + "! I'm the Daily Check-in Bot. Type \"help\" for available commands.");
     }
 
-    if (lowerText === 'ping') {
-      return createChatResponse("🏓 Pong! Bot is working.");
-    }
-
     if (lowerText === 'help' || lowerText === '?') {
       return createChatResponse(
         "📋 *Daily Check-in Bot Help*\n\n" +
-        "*Commands:*\n" +
-        "• `help` - Show this message\n" +
-        "• `ping` - Check if bot is responding\n" +
-        "• `refresh` - Refresh ClickUp data\n\n" +
         "*How it works:*\n" +
-        "• Morning: I'll send you your tasks for the day\n" +
-        "• Reply \"here\" or share your priority to check in\n" +
-        "• EOD: I'll ask you to update task progress\n" +
-        "• Reply with your EOD summary when prompted"
+        "• Morning: I'll send you a ✅ *Check In* button with your task summary\n" +
+        "• Click the button to confirm attendance and see your tasks\n" +
+        "• EOD: I'll send you a 📝 *Start EOD* button\n" +
+        "• Click it to load task cards, then reply with your EOD summary\n\n" +
+        "*Commands:*\n" +
+        "• `refresh` — Reload ClickUp tasks during EOD\n" +
+        "• `ping` — Check if bot is responding\n" +
+        "• `help` — Show this message"
       );
     }
 
@@ -306,62 +307,66 @@ function onMessage(event) {
       // to the EOD-specific refresh handler below
     }
 
-    // Test commands (for development) — single-word to avoid matching issues
-    // Return cards directly via createChatResponse (no REST API call to avoid 30s timeout)
-    if (lowerText === 'runeod') {
+    // Test commands — return card directly from handler (no REST API call)
+    if (lowerText === 'runcheckin') {
       try {
-        var eodConfig = getConfig();
-        var eodTestTasks = [];
+        var ciSummary = { overdue: 0, inProgress: 0, dueToday: 0 };
+        // Use real task counts if user can be resolved (sheet mapping or warm cache)
         try {
-          if (eodConfig.clickup_config && eodConfig.clickup_config.enabled) {
-            eodTestTasks = getTasksForUser(sender.email, 'today');
+          var ciTestCache = CacheService.getScriptCache();
+          var ciTestConfig = getConfig();
+          var ciTestUserMap = ciTestConfig.clickup_user_map || {};
+          var canResolveCI = !!(ciTestUserMap[sender.email] || ciTestUserMap[sender.email.toLowerCase()] || ciTestCache.get('clickup_workspace'));
+          if (canResolveCI) {
+            if (ciTestConfig.clickup_config && ciTestConfig.clickup_config.enabled) {
+              var ciTestTasks = getTasksForUser(sender.email, 'today');
+              var ciTestCat = categorizeTasks(ciTestTasks, sender.email);
+              ciSummary = { overdue: ciTestCat.overdue.length, inProgress: ciTestCat.inProgress.length, dueToday: ciTestCat.dueTodayNotStarted.length };
+            }
+          } else {
+            // Warm cache in background so it's ready when they click the button
+            scheduleBackgroundTaskFetch(sender.email, 'checkin');
           }
-        } catch (taskErr) {
-          console.error('runeod: ClickUp task fetch failed:', taskErr.message);
+        } catch (e) {
+          console.error('runcheckin task count error:', e.message);
         }
-
-        // Build summary from tasks directly (skip BigQuery to stay under 30s)
-        var eodTestSummary = {
-          overdue: eodTestTasks.filter(function(t) { return t.isOverdue && t.statusType !== 'closed'; }).length,
-          inProgress: eodTestTasks.filter(function(t) { return !t.isOverdue && t.statusType === 'active'; }).length,
-          dueToday: eodTestTasks.filter(function(t) { return !t.isOverdue && t.statusType !== 'closed' && t.statusType !== 'active'; }).length,
-          completed: 0
-        };
-
-        var testLateMin = getLateMinutesForUser(sender.email);
-        var testLateNote = testLateMin > 0 ? 'You checked in ' + testLateMin + ' minutes late this morning.' : '';
-
-        var testEodCards = buildStartEodCard(testLateNote, '', eodTestSummary);
-        return createChatResponse({ cardsV2: testEodCards });
-      } catch (eodErr) {
-        console.error('runeod error:', eodErr.message, eodErr.stack);
-        return createChatResponse('Error running EOD test: ' + eodErr.message);
+        var ciCards = buildCheckInCard(sender.displayName || sender.email.split('@')[0], ciSummary);
+        return createChatResponse({ text: 'Click the button below to check in and load your tasks.', cardsV2: ciCards });
+      } catch (err) {
+        console.error('runcheckin error:', err.message, err.stack);
+        return createChatResponse('Error: ' + err.message);
       }
     }
 
-    if (lowerText === 'runcheckin') {
+    if (lowerText === 'runeod') {
       try {
-        var ciConfig = getConfig();
-        var ciTasks = [];
+        // Clear any existing EOD state so test can be re-run
+        clearUserState(sender.email);
+        clearEodRetryCount(sender.email);
+        var eodSummary = { overdue: 0, inProgress: 0, dueToday: 0, completed: 0 };
+        // Use real task counts if user can be resolved (sheet mapping or warm cache)
         try {
-          if (ciConfig.clickup_config && ciConfig.clickup_config.enabled) {
-            ciTasks = getTasksForUser(sender.email, 'today');
+          var eodTestCache = CacheService.getScriptCache();
+          var eodTestConfig = getConfig();
+          var eodTestUserMap = eodTestConfig.clickup_user_map || {};
+          var canResolveEod = !!(eodTestUserMap[sender.email] || eodTestUserMap[sender.email.toLowerCase()] || eodTestCache.get('clickup_workspace'));
+          if (canResolveEod && eodTestConfig.clickup_config && eodTestConfig.clickup_config.enabled) {
+            var eodTestTasks = getTasksForUser(sender.email, 'today');
+            var eodTestCat = categorizeTasks(eodTestTasks, sender.email);
+            eodSummary = { overdue: eodTestCat.overdue.length, inProgress: eodTestCat.inProgress.length, dueToday: eodTestCat.dueTodayNotStarted.length, completed: eodTestCat.completedCount || 0 };
+          } else if (!canResolveEod) {
+            scheduleBackgroundTaskFetch(sender.email, 'eod');
           }
-        } catch (taskErr) {
-          console.error('runcheckin: ClickUp task fetch failed:', taskErr.message);
+        } catch (e) {
+          console.error('runeod task count error:', e.message);
         }
-
-        // Build summary from tasks directly (skip BigQuery to stay under 30s)
-        var ciSummary = {
-          overdue: ciTasks.filter(function(t) { return t.isOverdue && t.statusType !== 'closed'; }).length,
-          inProgress: ciTasks.filter(function(t) { return !t.isOverdue && t.statusType === 'active'; }).length,
-          dueToday: ciTasks.filter(function(t) { return !t.isOverdue && t.statusType !== 'closed' && t.statusType !== 'active'; }).length
-        };
-        var ciCards = buildCheckInCard(sender.displayName || sender.email.split('@')[0], ciSummary);
-        return createChatResponse({ cardsV2: ciCards });
-      } catch (ciErr) {
-        console.error('runcheckin error:', ciErr.message, ciErr.stack);
-        return createChatResponse('Error: ' + ciErr.message);
+        var eodCards = buildStartEodCard('', '', eodSummary);
+        // Set AWAITING_EOD so user can type EOD directly (matches production flow)
+        setUserState(sender.email, 'AWAITING_EOD');
+        return createChatResponse({ text: 'Click the button below to start your EOD report, or type your EOD directly.', cardsV2: eodCards });
+      } catch (err) {
+        console.error('runeod error:', err.message, err.stack);
+        return createChatResponse('Error: ' + err.message);
       }
     }
 
@@ -374,19 +379,25 @@ function onMessage(event) {
     // === State-based routing (BUG #2, #3, #4 fix) ===
     console.log("User state for " + sender.email + ": " + userState);
 
-    if (userState === 'AWAITING_CHECKIN') {
-      // Any reply during check-in window is treated as check-in
-      clearUserState(sender.email);
-      return handleCheckInResponse(sender.email, sender.displayName, text);
-    }
-
     if (userState === 'AWAITING_EOD' || (TEST_MODE && lowerText === 'completed testing tasks. no blockers. tomorrow: continue testing.')) {
 
       // --- REFRESH: re-pull ClickUp tasks and re-send EOD cards ---
       if (lowerText === 'refresh' || lowerText === 'refresh tasks' || lowerText === 'reload') {
         try {
-          // Clear cache to ensure we get absolute fresh data including new tasks
-          try { clearClickUpCache(); } catch (e) { }
+          // Check if user can be resolved quickly (sheet mapping or workspace cache)
+          var refreshCache = CacheService.getScriptCache();
+          var refreshConfig = getConfig();
+          var refreshUserMap = refreshConfig.clickup_user_map || {};
+          var canResolveRefresh = !!(refreshUserMap[sender.email] || refreshUserMap[sender.email.toLowerCase()] || refreshCache.get('clickup_workspace'));
+          if (!canResolveRefresh) {
+            scheduleBackgroundTaskFetch(sender.email, 'refresh');
+            return createChatResponse('⏳ Loading ClickUp data in the background. Tasks will appear shortly...');
+          }
+
+          // Clear task-specific cache only (NOT workspace structure)
+          try {
+            refreshCache.remove('clickup_tasks_' + sender.email);
+          } catch (e) { }
 
           var config2 = getConfig();
           var refreshTasks = [];
@@ -394,30 +405,14 @@ function onMessage(event) {
             refreshTasks = getTasksForUser(sender.email, 'today');
           }
 
-          var lateMin2 = getLateMinutesForUser(sender.email);
-          var wStats2 = null;
-          try {
-            if (typeof getUserWorkspaceStats === 'function') {
-              wStats2 = getUserWorkspaceStats(sender.email);
-            }
-          } catch (wsErr) { console.error('refresh: Workspace stats failed:', wsErr.message); }
+          // Build task cards using buildEodTaskMessage (simpler, no workspace stats to avoid timeout)
+          var refreshEodMsg = buildEodTaskMessage(refreshTasks, '');
 
-          var compWarn2 = null; // Refreshing should NOT re-trigger compliance strikes
-
-          var refreshEodMsg = getEodRequestMessage(
-            { email: sender.email, name: sender.displayName },
-            refreshTasks,
-            lateMin2,
-            wStats2,
-            compWarn2
-          );
-
-          // Send refreshed EOD message via REST API so cards render
+          // Send refreshed task cards via REST API
           if (refreshEodMsg.cardsV2) {
-            sendDirectMessage(sender.email, refreshEodMsg.text, refreshEodMsg.cardsV2);
-            if (refreshEodMsg.followUpText) {
-              sendDirectMessage(sender.email, refreshEodMsg.followUpText);
-            }
+            var refreshFullText = refreshEodMsg.text;
+            if (refreshEodMsg.followUpText) refreshFullText += '\n\n' + refreshEodMsg.followUpText;
+            sendDirectMessage(sender.email, refreshFullText, refreshEodMsg.cardsV2);
           } else {
             sendDirectMessage(sender.email, refreshEodMsg.text);
           }
@@ -426,7 +421,7 @@ function onMessage(event) {
           clearEodRetryCount(sender.email);
 
           console.log('EOD refreshed for ' + sender.email + ' with ' + refreshTasks.length + ' tasks');
-          return createChatResponse('🔄 **Tasks refreshed!** I\'ve re-sent your EOD prompt with ' + refreshTasks.length + ' task(s) from ClickUp. Please use the task cards above to mark each task, then submit your EOD summary.');
+          return createChatResponse('🔄 **Tasks refreshed!** ' + refreshTasks.length + ' task(s) re-sent above. Update your task cards, then submit your EOD summary.');
         } catch (refreshErr) {
           console.error('Error refreshing EOD for ' + sender.email + ':', refreshErr.message);
           return createChatResponse('❌ Error refreshing tasks: ' + refreshErr.message + '. Please try again.');
@@ -435,14 +430,34 @@ function onMessage(event) {
       var retryCount = getEodRetryCount(sender.email);
       var validation = validateEodSubmission(text);
 
-      // Check if user completed any tasks today via card actions
+      // Check if user completed any tasks today (via bot cards OR directly in ClickUp)
       var noTasksCompleted = false;
       try {
+        // Check 1: Bot card actions in BigQuery
         var todayActions = getTodayTaskActions(sender.email);
-        var completedCount = todayActions.filter(function (a) { return a.action_type === 'COMPLETE'; }).length;
-        var anyActions = todayActions.length > 0;
-        // Flag if user had tasks shown but completed none, unless they explain why
-        if (completedCount === 0 && !lowerText.match(/no tasks|didn.t complete|couldn.t|was in meetings|meetings all day|sick|pto|out of office|off today|no clickup|not in clickup|worked on other|admin work|support|emails|training|onboarding/)) {
+        var botCompletedCount = todayActions.filter(function (a) { return a.action_type === 'COMPLETE'; }).length;
+        console.log('EOD completion check: BQ actions=' + todayActions.length + ' completed=' + botCompletedCount + ' for ' + sender.email);
+
+        // Check 2: ClickUp API — tasks with closed status closed today
+        var clickUpCompletedCount = 0;
+        try {
+          var eodConfig = getConfig();
+          if (eodConfig.clickup_config && eodConfig.clickup_config.enabled) {
+            var allTasks = getTasksForUser(sender.email, 'today');
+            clickUpCompletedCount = allTasks.filter(function (t) {
+              return t.statusType === 'closed';
+            }).length;
+            console.log('EOD completion check: ClickUp total=' + allTasks.length + ' closed=' + clickUpCompletedCount + ' for ' + sender.email);
+          }
+        } catch (cuErr) {
+          console.error('ClickUp completion check failed:', cuErr.message);
+        }
+
+        var totalCompleted = botCompletedCount + clickUpCompletedCount;
+        console.log('EOD completion check: totalCompleted=' + totalCompleted + ' for ' + sender.email);
+
+        // Only flag if ZERO completions from both sources AND user doesn't explain
+        if (totalCompleted === 0 && !lowerText.match(/no tasks|didn.t complete|couldn.t|was in meetings|meetings all day|sick|pto|out of office|off today|no clickup|not in clickup|worked on other|admin work|support|emails|training|onboarding|completed.*in clickup|updated.*clickup|closed.*task/)) {
           noTasksCompleted = true;
         }
       } catch (e) {
@@ -477,14 +492,13 @@ function onMessage(event) {
       }
     }
 
-    // === Fallback: check if "here" even without state (BUG #2 fix) ===
-    if (['here', 'i\'m here', 'im here', 'present'].includes(lowerText) ||
-      (TEST_MODE && ['here - testing check-in flow', 'here - late test'].includes(lowerText))) {
-      return handleCheckInResponse(sender.email, sender.displayName, text);
+    // Guide users to use button instead of text check-in
+    if (['here', 'i\'m here', 'im here', 'present'].includes(lowerText)) {
+      return createChatResponse('Please use the ✅ *Check In* button above to confirm your attendance.');
     }
 
     // Default response
-    return createChatResponse("✅ Got your message: \"" + text + "\"\n\nIf you're checking in, reply \"here\". For help, type \"help\".");
+    return createChatResponse("✅ Got your message: \"" + text + "\"\n\nType \"help\" for available commands.");
 
   } catch (error) {
     console.error("Error in onMessage:", error.message, error.stack);
@@ -516,8 +530,8 @@ function onAddToSpace(event) {
     if (isDM) {
       welcomeMessage = "👋 Hi! I'm the Daily Check-in Bot.\n\n" +
         "I'll send you:\n" +
-        "• Morning check-ins with your ClickUp tasks\n" +
-        "• EOD requests to update task progress\n\n" +
+        "• Morning check-in cards — click to confirm and see tasks\n" +
+        "• EOD cards — click to start your end-of-day report\n\n" +
         "Commands:\n" +
         "• `help` - Show help message\n" +
         "• `ping` - Check if bot is working";
@@ -573,9 +587,9 @@ function onCardClick(event) {
     case 'handleCompleteWithHours':
       return handleCompleteWithHours(event);
     case 'handleCheckIn':
-      return handleCheckInButton(event);
+      return handleCheckIn(event);
     case 'handleStartEod':
-      return handleStartEodButton(event);
+      return handleStartEod(event);
     default:
       console.warn('Unknown action: ' + actionName);
       return createChatResponse('Unknown action');
@@ -583,175 +597,196 @@ function onCardClick(event) {
 }
 
 /**
- * Handle check-in response
- */
-function handleCheckInResponse(email, name, text) {
-  // Log prompt response for adoption tracking
-  logPromptResponse(email, 'CHECKIN');
-
-  // Use per-user schedule for late threshold
-  var schedule = getUserWorkSchedule(email);
-  var now = new Date();
-
-  var graceMinutes = getLateThresholdMin();
-  var scheduleMinutes = timeToMinutes(schedule.blocks[0].start) + graceMinutes;
-  var nowChicago = Utilities.formatDate(now, 'America/Chicago', 'HH:mm');
-  var nowMinutes = timeToMinutes(nowChicago);
-  var lowerText = text.toLowerCase();
-
-  var isLate = TEST_MODE && lowerText === 'here - late test' ? true : (TEST_MODE && lowerText === 'here - testing check-in flow' ? false : nowMinutes > scheduleMinutes);
-
-  logCheckIn(email, now, text, isLate);
-
-  return createChatResponse(getCheckInConfirmation(isLate));
-}
-
-/**
  * Handle Check In button click from morning card
  * Logs attendance, fetches tasks, sends interactive task cards
  */
-function handleCheckInButton(event) {
-  var user = event.chat ? event.chat.user : (event.user || {});
-  var email = user.email;
-  var name = user.displayName || (email ? email.split('@')[0] : 'there');
-
-  if (!email) {
-    return createChatResponse('Error: Could not determine your email.');
-  }
-
-  // Double-click protection: check if already checked in today
+function handleCheckIn(event) {
   try {
-    var todayCheckIns = getTodayCheckIns();
-    var alreadyCheckedIn = todayCheckIns.some(function(c) { return c.user_email === email; });
-    if (alreadyCheckedIn) {
-      return createChatResponse({
-        actionResponse: { type: 'UPDATE_MESSAGE' },
-        text: '✅ You\'ve already checked in today.'
-      });
+    var email = event.chat.user.email;
+    var name = event.chat.user.displayName || email.split('@')[0];
+
+    // Double-click protection: check if already checked in today
+    try {
+      var todayCheckIns = getTodayCheckIns();
+      var alreadyCheckedIn = todayCheckIns.some(function(c) { return c.user_email === email; });
+      if (alreadyCheckedIn) {
+        return createChatResponse({
+          actionResponse: { type: 'UPDATE_MESSAGE' },
+          text: '✅ You\'ve already checked in today.'
+        });
+      }
+    } catch (e) {
+      console.error('handleCheckIn: dedup check failed:', e.message);
     }
-  } catch (e) {
-    console.error('handleCheckInButton: dedup check failed:', e.message);
-    // Continue anyway — better to allow a duplicate than block a check-in
-  }
 
-  // Log attendance
-  logPromptResponse(email, 'CHECKIN');
-  var schedule = getUserWorkSchedule(email);
-  var now = new Date();
-  var graceMinutes = getLateThresholdMin();
-  var scheduleMinutes = timeToMinutes(schedule.blocks[0].start) + graceMinutes;
-  var nowChicago = Utilities.formatDate(now, 'America/Chicago', 'HH:mm');
-  var nowMinutes = timeToMinutes(nowChicago);
-  var isLate = nowMinutes > scheduleMinutes;
-  logCheckIn(email, now, 'Button check-in', isLate);
+    // Clear any leftover state after check-in
+    clearUserState(email);
 
-  // Fetch tasks
-  var config = getConfig();
-  var tasks = [];
-  try {
-    if (config.clickup_config && config.clickup_config.enabled) {
-      tasks = getTasksForUser(email, 'today');
+    // Log attendance
+    var now = new Date();
+    var nowChicago = Utilities.formatDate(now, 'America/Chicago', 'HH:mm');
+    var isLate = false;
+    try {
+      logPromptResponse(email, 'CHECKIN');
+      var schedule = getUserWorkSchedule(email);
+      var graceMinutes = getLateThresholdMin();
+      var scheduleMinutes = timeToMinutes(schedule.blocks[0].start) + graceMinutes;
+      var nowMinutes = timeToMinutes(nowChicago);
+      isLate = nowMinutes > scheduleMinutes;
+      logCheckIn(email, now, 'Button check-in', isLate);
+    } catch (logErr) {
+      console.error('handleCheckIn: attendance logging failed:', logErr.message);
     }
-  } catch (err) {
-    console.error('handleCheckInButton: task fetch failed:', err.message);
-  }
 
-  // Categorize
-  var cat = categorizeTasks(tasks, email);
+    // Fetch and send tasks — only if user can be resolved quickly (avoids 30s timeout)
+    var tasksFetched = false;
+    try {
+      var ciCache = CacheService.getScriptCache();
+      var config = getConfig();
+      var tasks = [];
+      // v125+ fast path: check sheet mapping OR workspace cache for quick user ID resolution
+      var ciUserMap = config.clickup_user_map || {};
+      var canResolveUser = !!(ciUserMap[email] || ciUserMap[email.toLowerCase()] || ciCache.get('clickup_workspace'));
+      if (canResolveUser && config.clickup_config && config.clickup_config.enabled) {
+        try {
+          tasks = getTasksForUser(email, 'today');
+          tasksFetched = true;
+        } catch (err) {
+          console.error('handleCheckIn: task fetch failed:', err.message);
+        }
 
-  // Build confirmation text
-  var confirmText = getCheckInConfirmation(isLate) + '\n\n';
-  if (cat.completedCount > 0) {
-    confirmText += '✅ *' + cat.completedCount + ' task(s) completed today so far*\n\n';
-  }
+        var checkinMsg = isLate
+          ? '⏰ *Checked in (late) at ' + nowChicago + '*'
+          : '✅ *Checked in at ' + nowChicago + '*. Have a productive day!';
 
-  // Build cards for open tasks
-  var allOpenTasks = cat.overdue.concat(cat.inProgress).concat(cat.dueTodayNotStarted);
-  if (allOpenTasks.length > 0) {
-    var taskCards = allOpenTasks.slice(0, 10).map(function(task, i) { return buildTaskCard(task, i); });
-    var cardText = confirmText + '📋 Here are your tasks for today (' + allOpenTasks.length + ' task' + (allOpenTasks.length === 1 ? '' : 's') + '):';
-    if (cat.overdue.length > 0) {
-      cardText += '\n⚠️ *' + cat.overdue.length + ' overdue* — please prioritize these.';
+        if (tasksFetched && tasks.length > 0) {
+          var cat = categorizeTasks(tasks, email);
+          var confirmText = checkinMsg + '\n\n';
+          if (cat.completedCount > 0) {
+            confirmText += '✅ *' + cat.completedCount + ' task(s) completed today so far*\n\n';
+          }
+          var allOpenTasks = cat.overdue.concat(cat.inProgress).concat(cat.dueTodayNotStarted);
+          if (allOpenTasks.length > 0) {
+            var taskCards = allOpenTasks.slice(0, 10).map(function(task, i) { return buildTaskCard(task, i); });
+            var cardText = confirmText + '📋 Here are your tasks for today (' + allOpenTasks.length + ' task' + (allOpenTasks.length === 1 ? '' : 's') + '):';
+            if (cat.overdue.length > 0) cardText += '\n⚠️ *' + cat.overdue.length + ' overdue* — please prioritize these.';
+            if (cat.inProgress.length > 0) cardText += '\n🔄 *' + cat.inProgress.length + ' in progress*';
+            sendDirectMessage(email, cardText, taskCards);
+          } else {
+            sendDirectMessage(email, confirmText + '📋 No open tasks due today.');
+          }
+        } else {
+          sendDirectMessage(email, checkinMsg + '\n\n📋 No open tasks due today.');
+        }
+      } else {
+        // Cache cold — schedule background fetch (6-min limit trigger)
+        var checkinMsg2 = isLate
+          ? '⏰ *Checked in (late) at ' + nowChicago + '*'
+          : '✅ *Checked in at ' + nowChicago + '*. Have a productive day!';
+        scheduleBackgroundTaskFetch(email, 'checkin');
+        sendDirectMessage(email, checkinMsg2 + '\n\n⏳ Loading your ClickUp tasks in the background...');
+      }
+    } catch (taskErr) {
+      console.error('handleCheckIn: task send failed:', taskErr.message);
     }
-    if (cat.inProgress.length > 0) {
-      cardText += '\n🔄 *' + cat.inProgress.length + ' in progress*';
-    }
-    sendDirectMessage(email, cardText, taskCards);
-  } else {
-    sendDirectMessage(email, confirmText + '📋 No open tasks due today. Make sure to create ClickUp tasks for everything you work on.');
-  }
 
-  // Replace the check-in card with confirmation
-  return createChatResponse({
-    actionResponse: { type: 'UPDATE_MESSAGE' },
-    text: isLate
-      ? '⏰ Checked in (late) at ' + nowChicago + '. Tasks sent above.'
-      : '✅ Checked in at ' + nowChicago + '. Tasks sent above.'
-  });
+    // Replace the check-in card with confirmation
+    return createChatResponse({
+      actionResponse: { type: 'UPDATE_MESSAGE' },
+      text: isLate
+        ? '⏰ Checked in (late) at ' + nowChicago + '. ' + (tasksFetched ? 'Tasks sent above.' : 'Tasks loading in background...')
+        : '✅ Checked in at ' + nowChicago + '. ' + (tasksFetched ? 'Tasks sent above.' : 'Tasks loading in background...')
+    });
+  } catch (fatalErr) {
+    console.error('handleCheckIn FATAL:', fatalErr.message, fatalErr.stack);
+    return createChatResponse({
+      actionResponse: { type: 'UPDATE_MESSAGE' },
+      text: '❌ Check-in error: ' + fatalErr.message
+    });
+  }
 }
 
 /**
  * Handle Start EOD button click
  * Fetches tasks, sends interactive task cards + EOD format guide, sets AWAITING_EOD
  */
-function handleStartEodButton(event) {
-  var user = event.chat ? event.chat.user : (event.user || {});
-  var email = user.email;
-  var name = user.displayName || (email ? email.split('@')[0] : 'there');
+function handleStartEod(event) {
+  try {
+    var email = event.chat.user.email;
+    var name = event.chat.user.displayName || email.split('@')[0];
 
-  if (!email) {
-    return createChatResponse('Error: Could not determine your email.');
-  }
+    // State may already be AWAITING_EOD (set by scheduled trigger) — that's fine,
+    // clicking the button loads task cards. Only reset retry count on fresh click.
+    var currentState = getUserState(email);
+    if (currentState !== 'AWAITING_EOD') {
+      setUserState(email, 'AWAITING_EOD');
+      clearEodRetryCount(email);
+    }
 
-  // Double-click protection: if already in AWAITING_EOD, don't re-send
-  var currentState = getUserState(email);
-  if (currentState === 'AWAITING_EOD') {
+    // Dedup: prevent duplicate task cards if button clicked multiple times
+    var eodDedupCache = CacheService.getScriptCache();
+    var eodDedupKey = 'eod_started_' + email.replace(/[^a-zA-Z0-9]/g, '_');
+    if (eodDedupCache.get(eodDedupKey)) {
+      return createChatResponse({
+        actionResponse: { type: 'UPDATE_MESSAGE' },
+        text: '📝 EOD already started. Reply with your EOD summary when ready.'
+      });
+    }
+    eodDedupCache.put(eodDedupKey, '1', 120); // 2-minute dedup window
+
+    // Fetch tasks if user can be resolved quickly (sheet mapping or workspace cache)
+    var tasks = [];
+    var tasksFetched = false;
+    try {
+      var cache = CacheService.getScriptCache();
+      var config = getConfig();
+      var eodUserMap = config.clickup_user_map || {};
+      var canResolveUser = !!(eodUserMap[email] || eodUserMap[email.toLowerCase()] || cache.get('clickup_workspace'));
+      if (canResolveUser && config.clickup_config && config.clickup_config.enabled) {
+        tasks = getTasksForUser(email, 'today');
+        tasksFetched = true;
+      }
+    } catch (err) {
+      console.error('handleStartEod: task fetch failed:', err.message);
+    }
+
+    // Send task cards via REST API
+    try {
+      if (tasksFetched && tasks.length > 0) {
+        var eodMessage = buildEodTaskMessage(tasks, '');
+        var fullText = eodMessage.text;
+        if (eodMessage.followUpText) fullText += '\n\n' + eodMessage.followUpText;
+        if (eodMessage.cardsV2) {
+          sendDirectMessage(email, fullText, eodMessage.cardsV2);
+        } else {
+          sendDirectMessage(email, fullText);
+        }
+      } else {
+        // Cache cold — schedule background task fetch + show format guide
+        scheduleBackgroundTaskFetch(email, 'eod');
+        sendDirectMessage(email, '📝 Time for your EOD report!\n\n⏳ Loading your ClickUp tasks in the background...\n\n' +
+          '📝 **Reply format:**\n―――――――――――――――――――\n' +
+          '*Hours:* [Total, e.g. 7h 30m]\n' +
+          '*Meetings:* [count] | [total time] | [names + durations]\n' +
+          '*Tomorrow:* [Task 1 + CU link] | [Task 2 + CU link]\n' +
+          '*Blockers/Issues:* [what > owner > deadline] _(if any)_\n' +
+          '―――――――――――――――――――');
+      }
+    } catch (sendErr) {
+      console.error('handleStartEod: send failed:', sendErr.message);
+    }
+
     return createChatResponse({
       actionResponse: { type: 'UPDATE_MESSAGE' },
-      text: '📝 EOD already started. Update your task cards above and reply with your summary.'
+      text: '📝 EOD started! ' + (tasksFetched ? 'Update your task cards above, then' : 'Your tasks are loading in the background. Once they appear,') + ' reply with your EOD summary.'
+    });
+  } catch (fatalErr) {
+    console.error('handleStartEod FATAL:', fatalErr.message, fatalErr.stack);
+    return createChatResponse({
+      actionResponse: { type: 'UPDATE_MESSAGE' },
+      text: '❌ EOD error: ' + fatalErr.message
     });
   }
-
-  // Fetch tasks (fresh pull)
-  var config = getConfig();
-  try { clearClickUpCache(); } catch (e) { }
-
-  var tasks = [];
-  try {
-    if (config.clickup_config && config.clickup_config.enabled) {
-      tasks = getTasksForUser(email, 'today');
-    }
-  } catch (err) {
-    console.error('handleStartEodButton: task fetch failed:', err.message);
-  }
-
-  // Categorize
-  var cat = categorizeTasks(tasks, email);
-
-  // Build the EOD task message using existing builder
-  var allOpenTasks = cat.overdue.concat(cat.inProgress).concat(cat.dueTodayNotStarted);
-  var completedNote = cat.completedCount > 0 ? '✅ *' + cat.completedCount + ' task(s) completed today*\n\n' : '';
-  var eodMessage = buildEodTaskMessage(allOpenTasks, completedNote);
-
-  // Send task cards + format guide via REST API
-  if (eodMessage.cardsV2) {
-    sendDirectMessage(email, eodMessage.text, eodMessage.cardsV2);
-    if (eodMessage.followUpText) {
-      sendDirectMessage(email, eodMessage.followUpText);
-    }
-  } else {
-    sendDirectMessage(email, eodMessage.text);
-  }
-
-  // Set state and clear retry count
-  setUserState(email, 'AWAITING_EOD');
-  clearEodRetryCount(email);
-
-  // Replace the Start EOD card with confirmation
-  return createChatResponse({
-    actionResponse: { type: 'UPDATE_MESSAGE' },
-    text: '📝 EOD started! Update your task cards above, then reply with your EOD summary.'
-  });
 }
 
 /**
@@ -771,6 +806,118 @@ function handleEodResponse(email, name, text) {
   // Return instantly to avoid 30s timeout on Google Chat request
   // NOTE: A separate 1-minute time-driven trigger MUST be manually created for processEodBackground
   return createChatResponse('⏳ *Processing your EOD report...*\nI am evaluating your tasks and hours. I will send your results in a new message shortly!');
+}
+
+/**
+ * Schedule a background task fetch (runs with 6-min trigger limit, avoids 30s timeout)
+ * @param {string} email - User email
+ * @param {string} type - 'checkin', 'eod', or 'refresh'
+ */
+function scheduleBackgroundTaskFetch(email, type) {
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty('TASK_FETCH_' + email.replace(/[^a-zA-Z0-9]/g, '_'),
+    JSON.stringify({ email: email, type: type, timestamp: Date.now() }));
+  ScriptApp.newTrigger('backgroundTaskFetch')
+    .timeBased()
+    .after(1000)
+    .create();
+  console.log('Scheduled backgroundTaskFetch for ' + email + ' type=' + type);
+}
+
+/**
+ * Background trigger handler: fetch ClickUp tasks and send via REST API
+ * Has 6-minute execution limit (vs 30s for onMessage/card click handlers)
+ */
+function backgroundTaskFetch() {
+  console.log('backgroundTaskFetch triggered');
+  var lock = LockService.getScriptLock();
+  if (!lock.tryLock(10000)) {
+    console.log('backgroundTaskFetch: could not acquire lock');
+    return;
+  }
+
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var allKeys = props.getKeys().filter(function(k) { return k.startsWith('TASK_FETCH_'); });
+    console.log('backgroundTaskFetch: found ' + allKeys.length + ' pending requests: ' + allKeys.join(', '));
+
+    if (allKeys.length === 0) {
+      console.log('backgroundTaskFetch: no pending requests, exiting');
+      lock.releaseLock();
+      return;
+    }
+
+    allKeys.forEach(function(key) {
+      try {
+        var raw = props.getProperty(key);
+        console.log('backgroundTaskFetch: processing ' + key + ' = ' + raw);
+        var data = JSON.parse(raw);
+        props.deleteProperty(key);
+
+        // Skip stale requests (older than 5 minutes)
+        if (Date.now() - data.timestamp > 5 * 60 * 1000) {
+          console.log('backgroundTaskFetch: skipping stale request for ' + data.email);
+          return;
+        }
+
+        var config = getConfig();
+        if (!config.clickup_config || !config.clickup_config.enabled) {
+          console.log('backgroundTaskFetch: clickup not enabled, skipping');
+          return;
+        }
+
+        console.log('backgroundTaskFetch: fetching tasks for ' + data.email + ' type=' + data.type);
+        var tasks = getTasksForUser(data.email, 'today');
+        console.log('backgroundTaskFetch: got ' + tasks.length + ' tasks for ' + data.email);
+
+        if (data.type === 'checkin') {
+          var cat = categorizeTasks(tasks, data.email);
+          var confirmText = '';
+          if (cat.completedCount > 0) {
+            confirmText += '✅ *' + cat.completedCount + ' task(s) completed today so far*\n\n';
+          }
+          var allOpenTasks = cat.overdue.concat(cat.inProgress).concat(cat.dueTodayNotStarted);
+          if (allOpenTasks.length > 0) {
+            var taskCards = allOpenTasks.slice(0, 10).map(function(task, i) { return buildTaskCard(task, i); });
+            var cardText = confirmText + '📋 Here are your tasks for today (' + allOpenTasks.length + '):';
+            if (cat.overdue.length > 0) cardText += '\n⚠️ *' + cat.overdue.length + ' overdue* — please prioritize these.';
+            if (cat.inProgress.length > 0) cardText += '\n🔄 *' + cat.inProgress.length + ' in progress*';
+            var sendResult = sendDirectMessage(data.email, cardText, taskCards);
+            console.log('backgroundTaskFetch: checkin sendDirectMessage result: ' + JSON.stringify(sendResult));
+          } else {
+            var sendResult2 = sendDirectMessage(data.email, '📋 No open tasks due today.');
+            console.log('backgroundTaskFetch: no tasks sendDirectMessage result: ' + JSON.stringify(sendResult2));
+          }
+
+        } else if (data.type === 'eod' || data.type === 'refresh') {
+          var eodMessage = buildEodTaskMessage(tasks, '');
+          var fullText = eodMessage.text;
+          if (eodMessage.followUpText) fullText += '\n\n' + eodMessage.followUpText;
+          if (eodMessage.cardsV2) {
+            var sendResult3 = sendDirectMessage(data.email, fullText, eodMessage.cardsV2);
+            console.log('backgroundTaskFetch: eod with cards sendDirectMessage result: ' + JSON.stringify(sendResult3));
+          } else {
+            var sendResult4 = sendDirectMessage(data.email, fullText);
+            console.log('backgroundTaskFetch: eod text-only sendDirectMessage result: ' + JSON.stringify(sendResult4));
+          }
+        }
+      } catch (err) {
+        console.error('backgroundTaskFetch error for ' + key + ':', err.message, err.stack);
+      }
+    });
+  } finally {
+    lock.releaseLock();
+  }
+
+  // Clean up one-time triggers for this function
+  try {
+    var triggers = ScriptApp.getProjectTriggers();
+    triggers.forEach(function(t) {
+      if (t.getHandlerFunction() === 'backgroundTaskFetch') {
+        ScriptApp.deleteTrigger(t);
+      }
+    });
+  } catch (e) { }
 }
 
 /**
@@ -801,11 +948,14 @@ function processEodBackground(e) {
           console.error('Error processing background EOD (' + key + '):', err.message);
           // Notify user their EOD failed, then delete to prevent infinite loop
           try {
-            sendDirectMessage(payload.email, '⚠️ There was an error processing your EOD report. Please try resending it.');
+            if (payload && payload.email) {
+              sendDirectMessage(payload.email, '⚠️ There was an error processing your EOD report. Please try resending it.');
+            }
           } catch (e2) { /* best effort notification */ }
           props.deleteProperty(key);
         }
       }
+
     }
   } finally {
     lock.releaseLock();
@@ -860,8 +1010,8 @@ function _processSingleEod(email, name, text, now) {
       if (taskSource === 'clickup' || taskSource === 'both') {
         tasks = getTasksForUser(email, 'today') || [];
         if (tasks.length > 0) {
-          var completed = tasks.filter(function (t) { return t.status && t.status.toLowerCase().includes('close'); }).length;
-          var inProgress = tasks.filter(function (t) { return t.status && t.status.toLowerCase().includes('progress'); }).length;
+          var completed = tasks.filter(function (t) { return t.statusType === 'closed'; }).length;
+          var inProgress = tasks.filter(function (t) { return t.statusType === 'custom' && t.status && t.status.toLowerCase().includes('progress'); }).length;
           var overdue = tasks.filter(function (t) { return t.isOverdue; }).length;
           feedback.taskStats = {
             total: tasks.length,
@@ -875,6 +1025,19 @@ function _processSingleEod(email, name, text, now) {
     }
   } catch (e) {
     console.error('Failed to fetch task stats for EOD feedback:', e.message);
+  }
+
+  // ClickUp time tracking — fetch actual tracked hours
+  try {
+    if (config.clickup_config && config.clickup_config.enabled) {
+      var timeData = getTodayTimeEntries(email);
+      if (timeData) {
+        feedback.clickUpTrackedHours = timeData.totalHours;
+        feedback.clickUpTimeEntries = timeData.entries;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to fetch ClickUp time entries:', e.message);
   }
 
   // AI hours estimation — compare reported hours to task complexity
@@ -1000,24 +1163,6 @@ function extractHoursWorked(text) {
   return null;
 }
 
-/**
- * Get help message
- */
-function getHelpMessage() {
-  return '👋 **Daily Check-in Bot Help**\n\n' +
-    '**Morning Check-in:**\n' +
-    'Reply "here" or share your #1 priority to confirm you\'re online.\n\n' +
-    '**EOD Report:**\n' +
-    'Share what you accomplished, blockers, and tomorrow\'s plan.\n\n' +
-    '**Task Buttons:**\n' +
-    '• ✅ Done - Mark task complete in ClickUp\n' +
-    '• 🔄 In Progress - Update task status\n' +
-    '• ➡️ Tomorrow - Move due date to tomorrow\n\n' +
-    '**Commands:**\n' +
-    '• `help` - Show this message\n' +
-    '• `refresh` - Refresh ClickUp data';
-}
-
 // ============================================
 // SHARED TRIGGER HELPERS (BUG #1, #11 fix)
 // ============================================
@@ -1074,18 +1219,21 @@ function _sendMorningCheckIns(isMonday) {
     var member = defaultMembers[i];
     try {
       var tasks = [];
-      if (config.clickup_config.enabled) {
+      if (config.clickup_config && config.clickup_config.enabled) {
         tasks = isMonday
           ? getTasksForUser(member.email, 'week')
           : getTasksForUser(member.email, 'today');
       }
 
-      var msg = getMorningCheckInMessage(member, tasks, isMonday);
-      sendDirectMessage(member.email, msg);
+      // Send button card instead of text
+      var cat = categorizeTasks(tasks, member.email);
+      var checkInCards = buildCheckInCard(
+        member.name || member.email.split('@')[0],
+        cat.summary
+      );
+      sendDirectMessage(member.email, '', checkInCards);
       logPromptSent(member.email, 'CHECKIN');
-
-      // Set user state to AWAITING_CHECKIN (BUG #4)
-      setUserState(member.email, 'AWAITING_CHECKIN');
+      // No AWAITING_CHECKIN state — button handler handles check-in
     } catch (err) {
       console.error('Error sending check-in to ' + member.email + ':', err.message);
     }
@@ -1123,7 +1271,20 @@ function _sendCheckInFollowUps() {
 
   for (var j = 0; j < notCheckedIn.length; j++) {
     try {
-      sendDirectMessage(notCheckedIn[j].email, getCheckInFollowUpMessage());
+      var followUpTasks = [];
+      try {
+        if (config.clickup_config && config.clickup_config.enabled) {
+          followUpTasks = getTasksForUser(notCheckedIn[j].email, 'today');
+        }
+      } catch (ftErr) {
+        console.error('Follow-up task fetch failed for ' + notCheckedIn[j].email + ':', ftErr.message);
+      }
+      var followUpCat = categorizeTasks(followUpTasks, notCheckedIn[j].email);
+      var followUpCards = buildCheckInCard(
+        notCheckedIn[j].name || notCheckedIn[j].email.split('@')[0],
+        followUpCat.summary
+      );
+      sendDirectMessage(notCheckedIn[j].email, '⏰ *Reminder:* Please check in.', followUpCards);
       logPromptSent(notCheckedIn[j].email, 'CHECKIN_FOLLOWUP');
     } catch (err) {
       console.error('Error sending follow-up to ' + notCheckedIn[j].email + ':', err.message);
@@ -1232,12 +1393,19 @@ function _postMorningSummary() {
 function _sendEodRequests() {
   console.log('Sending EOD requests...');
 
-  // Clear ClickUp cache so we pick up tasks created/completed during the day
+  // Clear per-user task caches so we pick up tasks created/completed during the day
+  // NOTE: Do NOT clear workspace structure cache — it's expensive to rebuild and
+  // only needed for list name enrichment (not for task fetching)
   try {
-    clearClickUpCache();
-    console.log('ClickUp cache cleared for fresh EOD task pull');
+    var eodCache = CacheService.getScriptCache();
+    var eodConfig = getConfig();
+    var eodMembers = eodConfig.team_members || [];
+    for (var ci = 0; ci < eodMembers.length; ci++) {
+      eodCache.remove('clickup_tasks_' + eodMembers[ci].email);
+    }
+    console.log('Per-user ClickUp task caches cleared for fresh EOD task pull');
   } catch (cacheErr) {
-    console.error('Error clearing ClickUp cache:', cacheErr.message);
+    console.error('Error clearing ClickUp caches:', cacheErr.message);
   }
 
   var teamMembers = getCachedWorkingEmployees();
@@ -1260,7 +1428,7 @@ function _sendEodRequests() {
     var member = defaultMembers[i];
     try {
       var tasks = [];
-      if (config.clickup_config.enabled) {
+      if (config.clickup_config && config.clickup_config.enabled) {
         tasks = getTasksForUser(member.email, 'today');
       }
 
@@ -1275,20 +1443,23 @@ function _sendEodRequests() {
       }
 
       var complianceWarning = handleClickUpCompliance(member.email, tasks.length);
-      var eodMessage = getEodRequestMessage(member, tasks, lateMinutes, workspaceStats, complianceWarning);
 
-      if (eodMessage.cardsV2) {
-        sendDirectMessage(member.email, eodMessage.text, eodMessage.cardsV2);
-        if (eodMessage.followUpText) {
-          sendDirectMessage(member.email, eodMessage.followUpText);
-        }
-      } else {
-        sendDirectMessage(member.email, eodMessage.text);
+      // Send button card instead of full task cards
+      var cat = categorizeTasks(tasks, member.email);
+      var lateNote = '';
+      if (lateMinutes && lateMinutes > 0) {
+        lateNote = 'You checked in ' + lateMinutes + ' minute' + (lateMinutes === 1 ? '' : 's') + ' late this morning.';
       }
+      var eodCards = buildStartEodCard(lateNote, complianceWarning || '', cat.summary);
 
+      // Workspace stats go in text (markdown renders in text, not in card widgets)
+      var eodText = '';
+      if (workspaceStats) {
+        eodText = formatWorkspaceStatsBlock(workspaceStats);
+      }
+      sendDirectMessage(member.email, eodText, eodCards);
       logPromptSent(member.email, 'EOD');
-
-      // Set user state to AWAITING_EOD (BUG #4)
+      // Set AWAITING_EOD so users can type EOD directly without clicking button
       setUserState(member.email, 'AWAITING_EOD');
       clearEodRetryCount(member.email);
     } catch (err) {
@@ -1328,8 +1499,20 @@ function _sendEodFollowUps() {
 
   for (var j = 0; j < notSubmitted.length; j++) {
     try {
-      sendDirectMessage(notSubmitted[j].email, getEodFollowUpMessage());
+      var eodFollowTasks = [];
+      try {
+        if (config.clickup_config && config.clickup_config.enabled) {
+          eodFollowTasks = getTasksForUser(notSubmitted[j].email, 'today');
+        }
+      } catch (eftErr) {
+        console.error('EOD follow-up task fetch failed for ' + notSubmitted[j].email + ':', eftErr.message);
+      }
+      var eodFollowCat = categorizeTasks(eodFollowTasks, notSubmitted[j].email);
+      var eodFollowCards = buildStartEodCard('', '', eodFollowCat.summary);
+      sendDirectMessage(notSubmitted[j].email, '⏰ *EOD Reminder:* Please submit your end-of-day report.', eodFollowCards);
       logPromptSent(notSubmitted[j].email, 'EOD_FOLLOWUP');
+      // Ensure AWAITING_EOD is set so users can type EOD directly
+      setUserState(notSubmitted[j].email, 'AWAITING_EOD');
     } catch (err) {
       console.error('Error sending EOD follow-up to ' + notSubmitted[j].email + ':', err.message);
     }
@@ -1657,6 +1840,9 @@ function triggerEodSummary() {
 
   // ClickUp snapshot merged here to save triggers (was separate triggerClickUpSnapshot at 5:15 PM)
   try { dailyClickUpSnapshot(); } catch (e) { console.error('ClickUp snapshot failed:', e.message); }
+
+  // Daily adoption metrics merged here to free trigger slot (was triggerDailyAdoptionMetrics at 5:20 PM)
+  try { computeDailyAdoptionMetrics(); } catch (e) { console.error('Daily adoption metrics failed:', e.message); }
 }
 
 /**
@@ -1972,14 +2158,18 @@ function dispatchPrompt(member, promptType, config, todayCheckIns, todayEods) {
         break; // Already checked in organically
       }
       var tasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
-      var msg = getMorningCheckInMessage(member, tasks, new Date().getDay() === 1);
-      sendDirectMessage(member.email, msg);
+      var dispCiCat = categorizeTasks(tasks, member.email);
+      var dispCiCards = buildCheckInCard(member.name || member.email.split('@')[0], dispCiCat.summary);
+      sendDirectMessage(member.email, '', dispCiCards);
       logPromptSent(member.email, 'CHECKIN');
-      setUserState(member.email, 'AWAITING_CHECKIN');
+      // No AWAITING_CHECKIN state — button click handles it
       break;
     case 'CHECKIN_FOLLOWUP':
       if (!todayCheckIns || !todayCheckIns.some(function (c) { return c.user_email === member.email; })) {
-        sendDirectMessage(member.email, getCheckInFollowUpMessage());
+        var dispFollowTasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
+        var dispFollowCat = categorizeTasks(dispFollowTasks, member.email);
+        var dispFollowCards = buildCheckInCard(member.name || member.email.split('@')[0], dispFollowCat.summary);
+        sendDirectMessage(member.email, '⏰ *Reminder:* Please check in.', dispFollowCards);
         logPromptSent(member.email, 'CHECKIN_FOLLOWUP');
       }
       break;
@@ -1996,32 +2186,34 @@ function dispatchPrompt(member, promptType, config, todayCheckIns, todayEods) {
       }
       var eodTasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
       var lateMin = getLateMinutesForUser(member.email, todayCheckIns);
+      var complianceWarn = handleClickUpCompliance(member.email, eodTasks.length);
+      var dispEodCat = categorizeTasks(eodTasks, member.email);
+      var dispLateNote = lateMin > 0 ? 'You checked in ' + lateMin + ' minutes late this morning.' : '';
+      var dispEodCards = buildStartEodCard(dispLateNote, complianceWarn || '', dispEodCat.summary);
 
-      var wStats = null;
+      var dispEodText = '';
       try {
         if (typeof getUserWorkspaceStats === 'function') {
-          wStats = getUserWorkspaceStats(member.email);
+          var wStats = getUserWorkspaceStats(member.email);
+          if (wStats) dispEodText = formatWorkspaceStatsBlock(wStats);
         }
       } catch (wsErr) {
         console.error('Error fetching workspace stats for ' + member.email + ':', wsErr.message);
       }
 
-      var complianceWarn = handleClickUpCompliance(member.email, eodTasks.length);
-      var eodMessage = getEodRequestMessage(member, eodTasks, lateMin, wStats, complianceWarn);
-      if (eodMessage.cardsV2) {
-        sendDirectMessage(member.email, eodMessage.text, eodMessage.cardsV2);
-        if (eodMessage.followUpText) sendDirectMessage(member.email, eodMessage.followUpText);
-      } else {
-        sendDirectMessage(member.email, eodMessage.text);
-      }
+      sendDirectMessage(member.email, dispEodText, dispEodCards);
       logPromptSent(member.email, 'EOD');
       setUserState(member.email, 'AWAITING_EOD');
       clearEodRetryCount(member.email);
       break;
     case 'EOD_FOLLOWUP':
       if (!todayEods || !todayEods.some(function (e) { return e.user_email === member.email; })) {
-        sendDirectMessage(member.email, getEodFollowUpMessage());
+        var dispEodFollowTasks = config.clickup_config && config.clickup_config.enabled ? getTasksForUser(member.email, 'today') : [];
+        var dispEodFollowCat = categorizeTasks(dispEodFollowTasks, member.email);
+        var dispEodFollowCards = buildStartEodCard('', '', dispEodFollowCat.summary);
+        sendDirectMessage(member.email, '⏰ *EOD Reminder:* Please submit your end-of-day report.', dispEodFollowCards);
         logPromptSent(member.email, 'EOD_FOLLOWUP');
+        setUserState(member.email, 'AWAITING_EOD');
       }
       break;
     case 'ESCALATION_EOD':

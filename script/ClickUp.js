@@ -15,7 +15,7 @@ function getClickUpToken() {
 /**
  * Make authenticated request to ClickUp API
  */
-function clickUpRequest(endpoint, method = 'GET', payload = null) {
+function clickUpRequest(endpoint, method = 'GET', payload = null, retryCount = 0) {
   const token = getClickUpToken();
 
   if (!token) {
@@ -41,10 +41,13 @@ function clickUpRequest(endpoint, method = 'GET', payload = null) {
     const code = response.getResponseCode();
 
     if (code === 429) {
-      // Rate limited - wait and retry
-      console.warn('ClickUp rate limited, waiting 60s...');
+      if (retryCount >= 2) {
+        console.error('ClickUp rate limit exceeded after ' + retryCount + ' retries');
+        return null;
+      }
+      console.warn('ClickUp rate limited, waiting 60s... (retry ' + (retryCount + 1) + ')');
       Utilities.sleep(60000);
-      return clickUpRequest(endpoint, method, payload);
+      return clickUpRequest(endpoint, method, payload, retryCount + 1);
     }
 
     if (code >= 400) {
@@ -177,27 +180,127 @@ function clearClickUpCache() {
 }
 
 /**
- * Get ClickUp user ID from Google email
+ * Get stored ClickUp team ID (fast — no API call)
+ * Falls back to fetching from API if not stored yet
  */
-function getClickUpUserId(googleEmail) {
-  const structure = getWorkspaceStructure();
-  if (!structure) return null;
+function getTeamId() {
+  var props = PropertiesService.getScriptProperties();
+  var teamId = props.getProperty('CLICKUP_TEAM_ID');
+  if (teamId) return teamId;
 
-  const emailLower = googleEmail.toLowerCase();
+  // Fallback: fetch from API and store
+  console.log('CLICKUP_TEAM_ID not set, fetching from API...');
+  var teams = clickUpRequest('/team');
+  if (teams && teams.teams && teams.teams.length > 0) {
+    teamId = teams.teams[0].id;
+    props.setProperty('CLICKUP_TEAM_ID', String(teamId));
+    console.log('Stored CLICKUP_TEAM_ID: ' + teamId);
+    return teamId;
+  }
+  console.error('Could not fetch ClickUp team ID');
+  return null;
+}
 
-  // Try direct email match
-  if (structure.members[emailLower]) {
-    return structure.members[emailLower].id;
+/**
+ * One-time sync: crawl ClickUp workspace and populate clickup_user_map sheet + CLICKUP_TEAM_ID.
+ * Run this from the GAS editor after initial setup, or after adding new team members.
+ * This is the ONLY function that does the expensive workspace crawl.
+ */
+function syncClickUpUserMap() {
+  console.log('=== Syncing ClickUp User Map ===');
+
+  // 1. Fetch team ID
+  var teams = clickUpRequest('/team');
+  if (!teams || !teams.teams || teams.teams.length === 0) {
+    console.error('No ClickUp teams found');
+    return;
+  }
+  var teamId = teams.teams[0].id;
+
+  // Store team ID in Script Properties
+  PropertiesService.getScriptProperties().setProperty('CLICKUP_TEAM_ID', String(teamId));
+  console.log('Stored CLICKUP_TEAM_ID: ' + teamId);
+
+  // 2. Fetch team members
+  var team = clickUpRequest('/team/' + teamId);
+  if (!team || !team.team || !team.team.members) {
+    console.error('Failed to fetch team members');
+    return;
   }
 
-  // Try config sheet mapping
-  const config = getConfig();
-  const userMap = config.clickup_user_map || {};
+  var members = team.team.members;
+  console.log('Found ' + members.length + ' ClickUp members');
+
+  // 3. Write to clickup_user_map sheet
+  var config = getConfig();
+  var ss = SpreadsheetApp.openById(config._spreadsheetId || PropertiesService.getScriptProperties().getProperty('CONFIG_SHEET_ID'));
+  var sheet = ss.getSheetByName('clickup_user_map');
+
+  if (!sheet) {
+    sheet = ss.insertSheet('clickup_user_map');
+    sheet.appendRow(['google_email', 'clickup_user_id', 'clickup_username']);
+    console.log('Created clickup_user_map sheet');
+  }
+
+  // Read existing mappings to preserve manual overrides
+  var existingData = sheet.getDataRange().getValues();
+  var existingMap = {};
+  for (var i = 1; i < existingData.length; i++) {
+    if (existingData[i][0]) {
+      existingMap[existingData[i][0].toLowerCase()] = true;
+    }
+  }
+
+  // Add new members that aren't already in the sheet
+  var added = 0;
+  for (var j = 0; j < members.length; j++) {
+    var member = members[j];
+    if (member.user && member.user.email) {
+      var email = member.user.email.toLowerCase();
+      if (!existingMap[email]) {
+        sheet.appendRow([email, String(member.user.id), member.user.username || '']);
+        added++;
+        console.log('Added: ' + email + ' -> ' + member.user.id);
+      } else {
+        console.log('Skipped (already exists): ' + email);
+      }
+    }
+  }
+
+  console.log('=== Sync complete: ' + added + ' new members added, ' + (members.length - added) + ' already existed ===');
+
+  // 4. Also rebuild the workspace cache while we're at it (for list name lookups)
+  getWorkspaceStructure();
+  console.log('Workspace structure cache refreshed');
+}
+
+/**
+ * Get ClickUp user ID from Google email
+ * FAST PATH: checks config sheet first (no API call)
+ * Only falls back to workspace crawl if sheet has no mapping
+ */
+function getClickUpUserId(googleEmail) {
+  // Fast path: check config sheet mapping first (no API call)
+  var config = getConfig();
+  var userMap = config.clickup_user_map || {};
   if (userMap[googleEmail]) {
     return userMap[googleEmail].clickup_user_id;
   }
 
-  console.warn(`No ClickUp user found for: ${googleEmail}`);
+  // Also try lowercase
+  var emailLower = googleEmail.toLowerCase();
+  if (userMap[emailLower]) {
+    return userMap[emailLower].clickup_user_id;
+  }
+
+  // Slow fallback: check workspace structure (requires API crawl)
+  console.warn('No sheet mapping for ' + googleEmail + ', falling back to workspace crawl');
+  var structure = getWorkspaceStructure();
+  if (structure && structure.members[emailLower]) {
+    return structure.members[emailLower].id;
+  }
+
+  console.warn('No ClickUp user found for: ' + googleEmail);
   return null;
 }
 
@@ -214,8 +317,8 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
     return [];
   }
 
-  const structure = getWorkspaceStructure();
-  if (!structure) return [];
+  const teamId = getTeamId();
+  if (!teamId) return [];
 
   const now = new Date();
   const timezone = 'America/Chicago';
@@ -223,25 +326,25 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
   let dueDateLt, dueDateGt;
 
   if (dueBy === 'today') {
-    // End of today
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
-    dueDateLt = endOfDay.getTime();
+    // End of today in Chicago timezone
+    var tomorrowChicago = Utilities.formatDate(new Date(now.getTime() + 86400000), 'America/Chicago', 'yyyy-MM-dd');
+    var chicagoHour = parseInt(Utilities.formatDate(now, 'America/Chicago', 'HH'));
+    var utcHour = now.getUTCHours();
+    var offsetHours = utcHour - chicagoHour;
+    if (offsetHours < 0) offsetHours += 24;
+    var endOfDayMs = new Date(tomorrowChicago + 'T00:00:00Z').getTime() + (offsetHours * 3600000);
+    dueDateLt = endOfDayMs;
     dueDateGt = 0; // Include all overdue
   } else if (dueBy === 'week') {
-    // End of Friday
     const friday = new Date(now);
     const daysUntilFriday = (5 - now.getDay() + 7) % 7;
     friday.setDate(now.getDate() + daysUntilFriday);
     friday.setHours(23, 59, 59, 999);
     dueDateLt = friday.getTime();
-
-    // BUG #10 fix: Include ALL overdue tasks (not just from this week)
-    // so Monday preview shows tasks overdue from previous weeks
     dueDateGt = 0;
   }
 
-  const endpoint = `/team/${structure.teamId}/task?` +
+  const endpoint = `/team/${teamId}/task?` +
     `assignees[]=${clickUpUserId}&` +
     `due_date_lt=${dueDateLt}&` +
     (dueDateGt > 0 ? `due_date_gt=${dueDateGt}&` : '') +
@@ -259,23 +362,33 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
 
-  // Filter: exclude tasks that were closed BEFORE today (old completed tasks)
-  // Keep: open tasks + tasks closed today (so completed-today tasks appear)
+  // Filter: exclude tasks that were closed BEFORE today
   var filteredTasks = result.tasks.filter(function (task) {
     var statusType = task.status && task.status.type ? task.status.type : 'open';
-    if (statusType !== 'closed') return true; // Keep all non-closed tasks
-
-    // For closed tasks, only keep if closed today (date_closed is ms timestamp)
+    if (statusType !== 'closed') return true;
     if (task.date_closed) {
       var closedDate = new Date(parseInt(task.date_closed));
-      return closedDate >= startOfToday; // Keep if closed today
+      return closedDate >= startOfToday;
     }
-    return false; // No close date on a closed task — skip
+    return false;
   });
+
+  // Try workspace cache for list context (fast if cached, skip if not)
+  var listLookup = {};
+  try {
+    var cachedWs = CacheService.getScriptCache().get('clickup_workspace');
+    if (cachedWs) {
+      var ws = JSON.parse(cachedWs);
+      if (ws.lists) {
+        ws.lists.forEach(function (l) { listLookup[l.id] = l; });
+      }
+    }
+  } catch (e) { /* skip enrichment if cache unavailable */ }
 
   // Enrich with list info and calculate overdue
   return filteredTasks.map(task => {
-    const list = structure.lists.find(l => l.id === task.list.id);
+    const taskList = task.list || {};
+    const list = taskList.id ? listLookup[taskList.id] : null;
     const dueDate = task.due_date ? new Date(parseInt(task.due_date)) : null;
     const isOverdue = dueDate && dueDate < startOfToday;
     const daysOverdue = isOverdue ? Math.floor((startOfToday - dueDate) / (1000 * 60 * 60 * 24)) : 0;
@@ -288,8 +401,8 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
       statusType: task.status?.type || 'open',
       dueDate: dueDate,
       dueDateStr: dueDate ? Utilities.formatDate(dueDate, timezone, 'EEE, MMM d') : null,
-      listId: task.list.id,
-      listName: list ? list.name : task.list.name,
+      listId: taskList.id || '',
+      listName: list ? list.name : (taskList.name || 'Unknown'),
       folderName: list ? list.folder : null,
       spaceName: list ? list.space : null,
       url: task.url,
@@ -300,7 +413,6 @@ function getTasksDueForUser(googleEmail, dueBy = 'today') {
       timeEstimateHrs: task.time_estimate ? Math.round(task.time_estimate / 3600000 * 10) / 10 : null
     };
   }).sort((a, b) => {
-    // Sort: overdue first (by days), then by due date
     if (a.isOverdue && !b.isOverdue) return -1;
     if (!a.isOverdue && b.isOverdue) return 1;
     if (a.isOverdue && b.isOverdue) return b.daysOverdue - a.daysOverdue;
@@ -474,14 +586,14 @@ function getTaskById(taskId) {
  * Get all overdue tasks for the team
  */
 function getAllOverdueTasks() {
-  const structure = getWorkspaceStructure();
-  if (!structure) return [];
+  const teamId = getTeamId();
+  if (!teamId) return [];
 
   const now = new Date();
   const startOfToday = new Date(now);
   startOfToday.setHours(0, 0, 0, 0);
 
-  const endpoint = `/team/${structure.teamId}/task?` +
+  const endpoint = `/team/${teamId}/task?` +
     `due_date_lt=${startOfToday.getTime()}&` +
     `include_closed=false&` +
     `subtasks=true`;
@@ -494,15 +606,21 @@ function getAllOverdueTasks() {
     const dueDate = task.due_date ? new Date(parseInt(task.due_date)) : null;
     const daysOverdue = dueDate ? Math.floor((startOfToday - dueDate) / (1000 * 60 * 60 * 24)) : 0;
 
-    // Find assignee email
+    // Find assignee email via reverse lookup from config sheet
     let assigneeEmail = null;
     if (task.assignees && task.assignees.length > 0) {
       const assignee = task.assignees[0];
-      // Reverse lookup from structure.members
-      for (const [email, member] of Object.entries(structure.members)) {
-        if (member.id === assignee.id) {
-          assigneeEmail = email;
-          break;
+      // Use assignee email from API response if available
+      if (assignee.email) {
+        assigneeEmail = assignee.email.toLowerCase();
+      } else {
+        // Reverse lookup from config sheet user map
+        var cfgMap = getConfig().clickup_user_map || {};
+        for (var mapEmail in cfgMap) {
+          if (cfgMap[mapEmail].clickup_user_id === String(assignee.id)) {
+            assigneeEmail = mapEmail;
+            break;
+          }
         }
       }
     }
@@ -523,19 +641,74 @@ function getAllOverdueTasks() {
 
 /**
  * Add time entry to a task
+ * Uses clickup_user_map sheet to attribute time to the correct user when available.
  */
-function addTimeEntry(taskId, durationMs, userName) {
-  var structure = getWorkspaceStructure();
-  if (!structure) return null;
+function addTimeEntry(taskId, durationMs, userName, userEmail) {
+  var teamId = getTeamId();
+  if (!teamId) return null;
 
   var now = Date.now();
-  return clickUpRequest('/team/' + structure.teamId + '/time_entries', 'POST', {
+  var payload = {
     tid: taskId,
     description: 'Logged via Daily Check-in Bot by ' + userName,
     duration: durationMs,
     start: now - durationMs,
     stop: now
-  });
+  };
+
+  // Attribute to the correct ClickUp user if mapping is available
+  if (userEmail) {
+    var clickUpUserId = getClickUpUserId(userEmail);
+    if (clickUpUserId) {
+      payload.assignee = parseInt(clickUpUserId, 10);
+    }
+  }
+
+  return clickUpRequest('/team/' + teamId + '/time_entries', 'POST', payload);
+}
+
+/**
+ * Get today's time entries for a user from ClickUp
+ * Returns { totalHours, entries: [{ taskName, hours }] }
+ */
+function getTodayTimeEntries(googleEmail) {
+  var teamId = getTeamId();
+  if (!teamId) return null;
+
+  var clickUpUserId = getClickUpUserId(googleEmail);
+  if (!clickUpUserId) return null;
+
+  var now = new Date();
+  var startOfDay = new Date(now);
+  startOfDay.setHours(0, 0, 0, 0);
+
+  var endpoint = '/team/' + teamId + '/time_entries?' +
+    'start_date=' + startOfDay.getTime() + '&' +
+    'end_date=' + now.getTime() + '&' +
+    'assignee=' + clickUpUserId;
+
+  try {
+    var result = clickUpRequest(endpoint);
+    if (!result || !result.data) return { totalHours: 0, entries: [] };
+
+    var entries = result.data.map(function (entry) {
+      return {
+        taskName: entry.task ? entry.task.name : 'Unknown',
+        taskId: entry.task ? entry.task.id : null,
+        hours: Math.round(parseInt(entry.duration) / 3600000 * 100) / 100,
+        description: entry.description || ''
+      };
+    });
+
+    var totalMs = result.data.reduce(function (sum, e) { return sum + parseInt(e.duration); }, 0);
+    return {
+      totalHours: Math.round(totalMs / 3600000 * 100) / 100,
+      entries: entries
+    };
+  } catch (e) {
+    console.error('getTodayTimeEntries failed for ' + googleEmail + ':', e.message);
+    return null;
+  }
 }
 
 /**

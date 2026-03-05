@@ -38,54 +38,25 @@ function escalateMissedEod(memberEmail, memberName) {
   const config = getConfig();
   const recipients = getReportRecipients('escalation');
 
-  // 1. Send full EOD request with cards to the EMPLOYEE
+  // 1. Send Start EOD button card to the EMPLOYEE
   try {
     var tasks = [];
     if (config.clickup_config && config.clickup_config.enabled) {
       tasks = getTasksForUser(memberEmail, 'today');
     }
 
-    // Commented out handleClickUpCompliance as per instruction
-    // if (config.clickup_config && config.clickup_config.enabled) {
-    //   handleClickUpCompliance(memberEmail, tasks);
-    // }
-
-    var wStatsEsc = null;
-    try {
-      if (typeof getUserWorkspaceStats === 'function') {
-        wStatsEsc = getUserWorkspaceStats(memberEmail);
-      }
-    } catch (wsErr) {
-      console.error('escalateMissedEod: Workspace stats failed:', wsErr.message);
-    }
-
-    var complianceWarnEsc = null;
-    // Escalation should not increment streak again - it was already incremented when the EOD prompt was generated at 4:30 PM.
-    // If they respond to the escalation but still have 0 tasks, it will not increment again.
-    // However, if they had 0 tasks, we can still output a generic warning string by checking here locally.
+    var complianceWarnEsc = '';
     if (tasks.length === 0) {
-      complianceWarnEsc = '🚨 Reminder: Please ensure you create and track ClickUp tasks for tomorrow.';
+      complianceWarnEsc = 'Please ensure you create and track ClickUp tasks for tomorrow.';
     }
 
-    var eodMessage = getEodRequestMessage({ email: memberEmail, name: memberName }, tasks, getLateMinutesForUser(memberEmail), wStatsEsc, complianceWarnEsc);
-
-    // Prefix with reminder
-    var reminderText = '⏰ **Reminder: You haven\'t submitted your EOD report yet.**\n\n' + eodMessage.text;
-
-    if (eodMessage.cardsV2) {
-      sendDirectMessage(memberEmail, reminderText, eodMessage.cardsV2);
-      if (eodMessage.followUpText) {
-        sendDirectMessage(memberEmail, eodMessage.followUpText);
-      }
-    } else {
-      sendDirectMessage(memberEmail, reminderText);
-    }
-
-    // Set state so enforcement kicks in on their response
+    var escCat = categorizeTasks(tasks, memberEmail);
+    var escCards = buildStartEodCard('', complianceWarnEsc, escCat.summary);
+    sendDirectMessage(memberEmail, '⚠️ *Final reminder:* Please submit your EOD report now.', escCards);
+    // Set AWAITING_EOD so user can type EOD directly
     setUserState(memberEmail, 'AWAITING_EOD');
-    clearEodRetryCount(memberEmail);
   } catch (err) {
-    console.error('Error sending EOD cards for escalation to ' + memberEmail + ':', err.message);
+    console.error('Error sending EOD card for escalation to ' + memberEmail + ':', err.message);
     // Fallback to plain text if card send fails
     sendDirectMessage(memberEmail, getMissedEodEscalation(memberEmail, memberName));
   }
@@ -305,21 +276,43 @@ function checkPersistentBlockers() {
   Object.keys(userBlockers).forEach(function (email) {
     var entries = userBlockers[email];
     if (entries.length >= blockerDays) {
+      // Verify dates are actually consecutive (not just N days in the window)
+      var sortedDates = entries.map(function (e) { return e.date; }).sort();
+      var consecutive = 1;
+      var maxConsecutive = 1;
+      for (var i = 1; i < sortedDates.length; i++) {
+        var prev = new Date(sortedDates[i - 1]);
+        var curr = new Date(sortedDates[i]);
+        var diffDays = Math.round((curr - prev) / (1000 * 60 * 60 * 24));
+        // Allow weekend gaps (Fri→Mon = 3 days)
+        if (diffDays === 1 || (diffDays <= 3 && prev.getDay() === 5)) {
+          consecutive++;
+          maxConsecutive = Math.max(maxConsecutive, consecutive);
+        } else {
+          consecutive = 1;
+        }
+      }
+
+      if (maxConsecutive < blockerDays) return; // Not actually consecutive
+
       var name = nameMap[email] || email;
       var blockerTexts = entries.map(function (e) { return e.date + ': ' + e.blocker; }).join('\n');
 
       var message = '🔴 *Persistent Blocker Alert*\n\n' +
-        name + ' has reported blockers for ' + entries.length + ' consecutive days:\n\n' +
+        name + ' has reported blockers for ' + maxConsecutive + ' consecutive days:\n\n' +
         blockerTexts + '\n\n' +
         'This may need manager intervention.';
 
-      sendDirectMessage(config.settings.manager_email, message);
+      var blockerRecipients = getReportRecipients('escalation');
+      blockerRecipients.forEach(function (recipient) {
+        sendDirectMessage(recipient, message);
+      });
 
       insertIntoBigQuery('escalations', [{
         escalation_id: Utilities.getUuid(),
         escalation_type: 'PERSISTENT_BLOCKER',
         user_email: email,
-        recipients: JSON.stringify([config.settings.manager_email]),
+        recipients: JSON.stringify(blockerRecipients),
         created_at: new Date().toISOString()
       }]);
     }

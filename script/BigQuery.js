@@ -20,9 +20,15 @@ function insertIntoBigQuery(tableName, rows) {
       const insertRequest = {
         rows: rows.map(row => ({ insertId: Utilities.getUuid(), json: row }))
       };
-      BigQuery.Tabledata.insertAll(insertRequest, projectId, DATASET_ID, tableName);
+      var fallbackResult = BigQuery.Tabledata.insertAll(insertRequest, projectId, DATASET_ID, tableName);
+      if (fallbackResult && fallbackResult.insertErrors && fallbackResult.insertErrors.length > 0) {
+        console.error(`BigQuery fallback insertErrors for ${tableName}:`, JSON.stringify(fallbackResult.insertErrors));
+        console.error(`Failed row data:`, JSON.stringify(rows));
+      } else {
+        console.log(`Inserted ${rows.length} rows into ${tableName} via built-in service`);
+      }
     } catch (e) {
-      console.error('Built-in fallback failed:', e.message);
+      console.error('Built-in fallback failed for ' + tableName + ':', e.message);
     }
     return;
   }
@@ -46,9 +52,20 @@ function insertIntoBigQuery(tableName, rows) {
 
     const response = UrlFetchApp.fetch(url, options);
     if (response.getResponseCode() !== 200) {
-      console.error(`BigQuery REST insert error for ${tableName}:`, response.getContentText());
+      console.error(`BigQuery REST insert error for ${tableName} (HTTP ${response.getResponseCode()}):`, response.getContentText());
     } else {
-      console.log(`Successfully inserted ${rows.length} rows into ${tableName} via SA`);
+      // Check for row-level insertErrors (BQ returns 200 even when rows fail)
+      try {
+        var bqResult = JSON.parse(response.getContentText());
+        if (bqResult.insertErrors && bqResult.insertErrors.length > 0) {
+          console.error(`BigQuery insertErrors for ${tableName}:`, JSON.stringify(bqResult.insertErrors));
+          console.error(`Failed row data:`, JSON.stringify(rows));
+        } else {
+          console.log(`Successfully inserted ${rows.length} rows into ${tableName} via SA`);
+        }
+      } catch (parseErr) {
+        console.log(`Inserted ${rows.length} rows into ${tableName} via SA (response parse skipped)`);
+      }
     }
   } catch (error) {
     console.error(`BigQuery REST insert exception for ${tableName}:`, error.message);
@@ -108,8 +125,12 @@ function runBigQueryQuery(query) {
 
     const jobId = queryResults.jobReference.jobId;
 
-    // Polling if not complete
+    // Polling if not complete (timeout after 60 seconds)
+    var pollCount = 0;
     while (!queryResults.jobComplete) {
+      if (++pollCount > 60) {
+        throw new Error('BigQuery query timed out after 60s');
+      }
       Utilities.sleep(1000);
       const pollUrl = `https://bigquery.googleapis.com/bigquery/v2/projects/${projectId}/queries/${jobId}`;
       const pollResponse = UrlFetchApp.fetch(pollUrl, {
@@ -250,7 +271,7 @@ function getTodayTaskActions(userEmail) {
   var projectId = getProjectId();
   var today = Utilities.formatDate(new Date(), 'America/Chicago', 'yyyy-MM-dd');
   var query = 'SELECT action_type, task_name FROM `' + projectId + '.' + DATASET_ID + '.clickup_task_actions` ' +
-    'WHERE user_email = "' + userEmail + '" AND DATE(timestamp) = "' + today + '"';
+    'WHERE user_email = "' + sanitizeForBQ(userEmail) + '" AND DATE(timestamp) = "' + today + '"';
   try {
     return runBigQueryQuery(query);
   } catch (e) {
@@ -358,7 +379,7 @@ function getTodayCheckIns() {
   const projectId = getProjectId();
 
   const query = `
-    SELECT user_email, checkin_timestamp, is_late
+    SELECT user_email, checkin_timestamp, is_late, response_text
     FROM \`${projectId}.${DATASET_ID}.check_ins\`
     WHERE checkin_date = '${today}'
   `;
@@ -374,7 +395,7 @@ function getTodayEodReports() {
   const projectId = getProjectId();
 
   const query = `
-    SELECT user_email, eod_timestamp, tasks_completed, blockers, tomorrow_priority, hours_worked
+    SELECT user_email, eod_timestamp, tasks_completed, blockers, tomorrow_priority, hours_worked, raw_response, eod_timestamp as submission_timestamp
     FROM \`${projectId}.${DATASET_ID}.v_eod_reports\`
     WHERE eod_date = '${today}'
   `;
@@ -1147,14 +1168,15 @@ function getYesterdayEodPriorities() {
  */
 function getUserYesterdayPriority(email) {
   var projectId = getProjectId();
+  var safeEmail = sanitizeForBQ(email);
   var query = 'SELECT tomorrow_priority '
     + 'FROM `' + projectId + '.' + DATASET_ID + '.v_eod_reports` '
-    + 'WHERE user_email = "' + email + '" '
+    + 'WHERE user_email = "' + safeEmail + '" '
     + 'AND eod_date = ( '
     + '  SELECT MAX(eod_date) FROM `' + projectId + '.' + DATASET_ID + '.v_eod_reports` '
     + '  WHERE eod_date < CURRENT_DATE() '
     + '  AND eod_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 4 DAY) '
-    + '  AND user_email = "' + email + '" '
+    + '  AND user_email = "' + safeEmail + '" '
     + ') '
     + 'AND tomorrow_priority IS NOT NULL '
     + 'AND tomorrow_priority != ""';
@@ -1260,7 +1282,7 @@ function logPromptResponse(email, promptType) {
 function getTaskPushCount(taskId) {
   var projectId = getProjectId();
   var query = 'SELECT COUNT(*) as push_count FROM `' + projectId + '.' + DATASET_ID + '.clickup_task_actions` ' +
-    'WHERE task_id = "' + taskId + '" AND action_type = "TOMORROW"';
+    'WHERE task_id = "' + sanitizeForBQ(taskId) + '" AND action_type = "TOMORROW"';
   var results = runBigQueryQuery(query);
   return results.length > 0 ? parseInt(results[0].push_count) : 0;
 }

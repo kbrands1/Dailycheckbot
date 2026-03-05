@@ -707,11 +707,11 @@ function computeGamingSignals(email, todayRawResponse, recentResponses, taskStat
   // 3. Hours inflation
   if (hoursReported !== null && taskStats) {
     var completedTasks = taskStats.completed || 0;
-    if (hoursReported >= 7 && completedTasks <= 1) {
-      flags.push('HOURS_INFLATION');
+    if (hoursReported >= 8 && completedTasks <= 2) {
+      flags.push(completedTasks <= 1 ? 'HOURS_INFLATION' : 'HOURS_ELEVATED');
       hoursTaskRatio = hoursReported + 'h / ' + completedTasks + ' tasks';
-    } else if (hoursReported >= 8 && completedTasks <= 2) {
-      flags.push('HOURS_ELEVATED');
+    } else if (hoursReported >= 7 && completedTasks <= 1) {
+      flags.push('HOURS_INFLATION');
       hoursTaskRatio = hoursReported + 'h / ' + completedTasks + ' tasks';
     }
   }

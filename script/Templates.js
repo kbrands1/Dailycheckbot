@@ -1,120 +1,8 @@
 /**
  * Templates.gs - Message Templates
- * All message templates for check-ins, EOD, summaries, etc.
- *
- * ============================================
- * ODOO INTEGRATION POINTS:
- * ============================================
- *
- * 1. getMorningCheckInMessage() - Line ~9
- *    - Check member's task_source setting
- *    - If 'odoo' or 'both', call getOdooTaskSummary(email)
- *    - Include Odoo tasks in the morning message
- *    - Example:
- *      const odooTasks = member.task_source !== 'clickup'
- *        ? getOdooTasksForUser(member.email, 'today')
- *        : [];
- *
- * 2. getEodRequestMessage() - Line ~39
- *    - Same logic: check task_source, fetch Odoo tasks
- *    - Merge ClickUp and Odoo tasks if 'both'
- *    - Build cards for Odoo tasks (may need OdooCards.gs)
- *
- * 3. buildMorningTaskMessage() - Called from getMorningCheckInMessage
- *    - May need separate section for Odoo tasks
- *    - Example: "📋 ClickUp Tasks:\n...\n\n📊 Odoo Tasks:\n..."
- *
- * 4. buildEodTaskMessage() - Called from getEodRequestMessage
- *    - Need to handle mixed task sources
- *    - Odoo task cards may have different actions
- *
- * ============================================
+ * Confirmation messages, AI evaluation prompts, workspace stats formatting, etc.
+ * Morning check-in and EOD request flows now use button cards (see ClickUpCards.js).
  */
-
-/**
- * Get morning check-in message
- */
-function getMorningCheckInMessage(member, tasks, isMonday) {
-  const config = getConfig();
-  const userName = member.name || member.email.split('@')[0];
-
-  // If Monday and weekly preview enabled
-  if (isMonday && config.clickup_config.show_weekly_monday) {
-    return buildWeeklyTaskPreview(tasks, userName);
-  }
-
-  // Regular day with tasks
-  if (config.clickup_config.include_in_morning && tasks && tasks.length > 0) {
-    return buildMorningTaskMessage(tasks, userName);
-  }
-
-  // No tasks or ClickUp disabled
-  return `Good morning${userName ? ', ' + userName : ''}! 👋\n\n` +
-    `⚠️ Please make sure to create ClickUp tasks for everything you work on and track the time for it.\n\n` +
-    `Please confirm you're online by replying "here" or sharing your #1 priority for today.`;
-}
-
-/**
- * Get check-in follow-up message
- */
-function getCheckInFollowUpMessage() {
-  return `⏰ **Reminder:** Please confirm you're online.\n\n` +
-    `Reply "here" or share what you're working on today.`;
-}
-
-/**
- * Get EOD request message with tasks
- * @param {object} member - Team member object
- * @param {Array} tasks - ClickUp/Odoo tasks
- * @param {number|null} lateMinutes - Minutes late this morning (null/0 = on time)
- * @param {object|null} workspaceStats - Workspace activity stats from Admin SDK
- * @param {string|null} complianceWarning - ClickUp compliance warning message
- */
-function getEodRequestMessage(member, tasks, lateMinutes, workspaceStats, complianceWarning) {
-  const config = getConfig();
-  var lateNote = '';
-  if (lateMinutes && lateMinutes > 0) {
-    lateNote = '⏰ _You checked in *' + lateMinutes + ' minute' + (lateMinutes === 1 ? '' : 's') + ' late* this morning. Please ensure on-time check-ins going forward._\n\n';
-  }
-
-  var activityBlock = '';
-  if (workspaceStats) {
-    activityBlock = formatWorkspaceStatsBlock(workspaceStats);
-  }
-
-  var complianceTxt = complianceWarning ? complianceWarning + '\n\n' : '';
-  var fullPrefix = lateNote + complianceTxt + activityBlock;
-
-  if (config.clickup_config.include_in_eod && tasks && tasks.length > 0) {
-    return buildEodTaskMessage(tasks, fullPrefix);
-  }
-
-  // No tasks or ClickUp disabled
-  return {
-    text: fullPrefix +
-      'Time for your EOD report! 📝\n\n' +
-      '🚨 **No ClickUp tasks found.** If you worked on tasks not in ClickUp, please describe them.\n\n' +
-      '📝 **Reply with:**\n' +
-      '―――――――――――――――――――\n' +
-      '*Hours:* [Total, e.g. 7h 30m]\n' +
-      '*Meetings:* [count] | [total time] | [names + durations]\n' +
-      '  _(or "0 meetings" if none)_\n' +
-      '*Tomorrow:* [Task 1 + CU link] | [Task 2 + CU link]\n' +
-      '*Blockers/Issues:* [what > owner > deadline] _(if any)_\n' +
-      '―――――――――――――――――――\n\n' +
-      '🔄 _Created new tasks in ClickUp? Say *refresh* to reload your task cards._',
-    cardsV2: null
-  };
-}
-
-/**
- * Get EOD follow-up message
- */
-function getEodFollowUpMessage() {
-  return `⏰ **EOD Reminder:** Please submit your end-of-day report.\n\n` +
-    `Share what you accomplished, any blockers, and tomorrow's priority.\n` +
-    `Don't forget to include your hours worked (e.g. "7 hours").`;
-}
 
 /**
  * Get check-in confirmation message
@@ -198,6 +86,31 @@ function buildEodFeedback(feedback) {
     }
   } else if (feedback.hoursWorked === null) {
     lines.push('\n⚠️ **Hours not reported.** Please reply with your hours worked today (e.g. "6.5"). Daily hours reporting is required.');
+  }
+
+  // ClickUp time tracking comparison
+  if (feedback.clickUpTrackedHours !== undefined && feedback.clickUpTrackedHours !== null) {
+    var tracked = feedback.clickUpTrackedHours;
+    if (tracked === 0) {
+      lines.push('\n⏱️ **ClickUp Time Tracking:** No time tracked in ClickUp today. Please log your time on tasks so your effort is visible.');
+    } else {
+      lines.push('\n⏱️ **ClickUp Time Tracking:** ' + tracked + 'h tracked today');
+      // Show per-task breakdown
+      if (feedback.clickUpTimeEntries && feedback.clickUpTimeEntries.length > 0) {
+        feedback.clickUpTimeEntries.forEach(function (entry) {
+          if (entry.hours > 0) {
+            lines.push('   • ' + entry.taskName + ': ' + entry.hours + 'h');
+          }
+        });
+      }
+      // Flag mismatch with reported hours
+      if (feedback.hoursWorked !== null && feedback.hoursWorked > 0) {
+        var diff = Math.abs(feedback.hoursWorked - tracked);
+        if (diff >= 2) {
+          lines.push('   ⚠️ You reported ' + feedback.hoursWorked + 'h but only ' + tracked + 'h is tracked in ClickUp. Please make sure all your work time is logged on tasks.');
+        }
+      }
+    }
   }
 
   // Follow-through check

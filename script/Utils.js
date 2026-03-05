@@ -52,8 +52,7 @@ function createScheduledTriggers() {
   // 5:00 PM - EOD Summary for Mon-Thu
   ScriptApp.newTrigger('triggerEodSummary').timeBased().atHour(17).nearMinute(0).everyDays(1).inTimezone('America/Chicago').create();
 
-  // 5:15 PM - ClickUp Snapshot (daily)
-  ScriptApp.newTrigger('triggerClickUpSnapshot').timeBased().atHour(17).nearMinute(15).everyDays(1).inTimezone('America/Chicago').create();
+  // (triggerClickUpSnapshot merged into triggerEodSummary to save triggers)
 
   // 11:30 AM - AI Evaluation for Friday
   ScriptApp.newTrigger('triggerAiEvaluationFriday').timeBased().atHour(11).nearMinute(30).everyDays(1).inTimezone('America/Chicago').create();
@@ -61,25 +60,21 @@ function createScheduledTriggers() {
   // 5:30 PM - AI Evaluation for Mon-Thu
   ScriptApp.newTrigger('triggerAiEvaluation').timeBased().atHour(17).nearMinute(30).everyDays(1).inTimezone('America/Chicago').create();
 
-  // 10:15 AM - Weekly Gamification (Friday only, checked in function)
-  ScriptApp.newTrigger('triggerWeeklyGamification').timeBased().atHour(10).nearMinute(15).everyDays(1).inTimezone('America/Chicago').create();
-
   // V2 TRIGGERS
 
-  // 5:20 PM - Daily Adoption Metrics (Mon-Thu, checked in function)
-  ScriptApp.newTrigger('triggerDailyAdoptionMetrics').timeBased().atHour(17).nearMinute(20).everyDays(1).inTimezone('America/Chicago').create();
+  // NOTE: triggerDailyAdoptionMetrics removed — merged into triggerEodSummary to free trigger slot
 
   // 10:00 AM Wednesday - Midweek Compliance Check (checked in function)
   ScriptApp.newTrigger('triggerMidweekCompliance').timeBased().atHour(10).nearMinute(0).everyDays(1).inTimezone('America/Chicago').create();
 
-  // 10:30 AM Friday - Weekly Adoption Report (checked in function)
+  // 10:30 AM Friday - Weekly Adoption Report + Gamification (merged to save triggers)
   ScriptApp.newTrigger('triggerWeeklyAdoptionReport').timeBased().atHour(10).nearMinute(30).everyDays(1).inTimezone('America/Chicago').create();
-
-  // 11:20 AM Friday - Daily Adoption Metrics for Friday (checked in function)
-  ScriptApp.newTrigger('triggerDailyAdoptionMetricsFriday').timeBased().atHour(11).nearMinute(20).everyDays(1).inTimezone('America/Chicago').create();
 
   // Every 30 minutes - Schedule Dispatcher for custom/split-shift users
   ScriptApp.newTrigger('triggerScheduleDispatcher').timeBased().everyMinutes(30).inTimezone('America/Chicago').create();
+
+  // Every 1 minute - Background processor for EOD reports and card queues
+  ScriptApp.newTrigger('processEodBackground').timeBased().everyMinutes(1).create();
 
   const count = ScriptApp.getProjectTriggers().length;
   console.log(`All triggers created! Total: ${count}`);
@@ -211,36 +206,42 @@ function getServiceAccountToken(scope) {
 function testSendCheckIn() {
   const config = getConfig();
   const email = config.settings.manager_email;
-  const tasks = getTasksForUser(email, 'today');
-  const msg = getMorningCheckInMessage({ email, name: 'Test' }, tasks, false);
-  sendDirectMessage(email, msg);
+  var tasks = [];
+  try {
+    if (config.clickup_config && config.clickup_config.enabled) {
+      tasks = getTasksForUser(email, 'today');
+    }
+  } catch (e) {
+    console.error('testSendCheckIn: task fetch failed:', e.message);
+  }
+  var cat = categorizeTasks(tasks, email);
+  var checkInCards = buildCheckInCard('Test', cat.summary);
+  sendDirectMessage(email, '', checkInCards);
   logPromptSent(email, 'CHECKIN');
-  setUserState(email, 'AWAITING_CHECKIN');
-  console.log(`Check-in sent to ${email}`);
+  console.log('Check-in card sent to ' + email);
 }
 
 function testSendEodRequest() {
   const config = getConfig();
   const email = config.settings.manager_email;
-  const tasks = getTasksForUser(email, 'today');
-  var wStatsTest = null;
+  var tasks = [];
   try {
-    if (typeof getUserWorkspaceStats === 'function') {
-      wStatsTest = getUserWorkspaceStats(email);
+    if (config.clickup_config && config.clickup_config.enabled) {
+      tasks = getTasksForUser(email, 'today');
     }
-  } catch (wsErr) {
-    console.error('testSendEodRequest: Workspace stats failed:', wsErr.message);
+  } catch (e) {
+    console.error('testSendEodRequest: task fetch failed:', e.message);
   }
-
-  var complianceWarnTest = null;
-  // Test command does not trigger compliance tracker to avoid skewing real data
-  console.log('Skipping compliance tracker in testSendEodRequest');
-
-  const eod = getEodRequestMessage({ email }, tasks, getLateMinutesForUser(email), wStatsTest, complianceWarnTest);
-  const result = sendDirectMessage(email, eod.text, eod.cardsV2);
+  var cat = categorizeTasks(tasks, email);
+  var lateMinutes = getLateMinutesForUser(email);
+  var lateNote = '';
+  if (lateMinutes && lateMinutes > 0) {
+    lateNote = 'You checked in ' + lateMinutes + ' minute' + (lateMinutes === 1 ? '' : 's') + ' late this morning.';
+  }
+  var eodCards = buildStartEodCard(lateNote, '', cat.summary);
+  var result = sendDirectMessage(email, '', eodCards);
   logPromptSent(email, 'EOD');
-  setUserState(email, 'AWAITING_EOD');
-  console.log(`EOD sent to ${email}`, result);
+  console.log('EOD card sent to ' + email, result);
 }
 
 /**
